@@ -1,0 +1,84 @@
+name: CI (Windows self-hosted)
+
+on:
+#  push:
+#    branches: [ "main" ]
+#  pull_request:
+#    branches: [ "main" ]
+ workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  uns-metadata-sync:
+    name: UNS Metadata Sync Service - CI Windows self-hosted
+
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          # honours the version in pyproject.toml (tool.python)
+          python-version-file: "pyproject.toml"
+          check-latest: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies with uv
+        run: |
+          python -m pip install --upgrade pip
+          # Sync the environment EXACTLY to pyproject.toml
+          uv sync --locked --all-extras --dev
+
+      - name: Validate migrations
+        env:
+          DB_MODE: mock
+        run: |
+          $code = @'
+          from uns_metadata_sync.migrations.runner import load_migrations
+
+          migrations = load_migrations()
+          if not migrations:
+              raise SystemExit("No migrations found")
+
+          for migration in migrations:
+              if not migration.up_sql.strip():
+                  raise SystemExit(f"Migration {migration.version} missing up SQL")
+              if not migration.down_sql.strip():
+                  raise SystemExit(f"Migration {migration.version} missing down SQL")
+
+          print(f"Validated {len(migrations)} migrations offline")
+          '@
+
+          $tmp = Join-Path $env:RUNNER_TEMP "validate_migrations.py"
+          Set-Content -Path $tmp -Value $code -Encoding UTF8
+          uv run python $tmp
+          Remove-Item $tmp -Force
+
+      - name: Lint with ruff and black
+        run: |
+          # stop the build if there are Python syntax errors or undefined names
+          uv run ruff check .
+          # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+          uv run black --check .
+
+      - name: Test with pytest
+        run: |
+          # Run pytest unit tests with coverage
+          # Minimum coverage is 70% for unit tests
+          uv run pytest -v -m unit --cov=. --cov-report=term-missing --cov-fail-under=70
+          # Uncomment for integration tests if/when needed
+          # uv run pytest -v -m integration --cov=.

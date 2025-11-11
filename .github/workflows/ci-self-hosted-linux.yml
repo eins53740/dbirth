@@ -1,0 +1,151 @@
+name: CI (Linux self-hosted)
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  uns-metadata-sync:
+    name: UNS Metadata Sync Service - CI Linux self-hosted
+    runs-on: [self-hosted, linux, X64]
+    timeout-minutes: 20
+
+    env:
+      UV_TOOL_DIR: ~/.local
+      UV_BIN: ~/.local/bin
+      UV_CONCURRENCY: "4"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Ensure git is installed
+        run: |
+          if command -v git >/dev/null 2>&1; then
+            git --version
+          else
+            if [ -f /etc/debian_version ]; then
+              sudo apt-get update -y
+              sudo apt-get install -y git
+            elif [ -f /etc/redhat-release ]; then
+              sudo yum install -y git || sudo dnf install -y git
+            elif [ -f /etc/alpine-release ]; then
+              sudo apk add --no-cache git
+            else
+              echo "Unsupported Linux distribution: install git manually." >&2
+              exit 1
+            fi
+          fi
+
+      - name: Ensure git safe.directory (self-hosted hygiene)
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          check-latest: true
+          cache: "pip"
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          uv --version
+
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.uv
+          key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/pyproject.toml', '**/uv.lock', '**/requirements*.txt') }}
+          restore-keys: |
+            uv-${{ runner.os }}-${{ runner.arch }}-
+
+      # >>> NEW: packages needed to build psycopg2 from source (pg_config + headers)
+      - name: Install PostgreSQL build deps
+        run: |
+          if [ -f /etc/debian_version ]; then
+            sudo apt-get update -y
+            sudo apt-get install -y build-essential pkg-config libpq-dev python3-dev
+          elif [ -f /etc/redhat-release ]; then
+            # RHEL/CentOS/Fedora
+            (sudo yum groupinstall -y "Development Tools" || sudo dnf groupinstall -y "Development Tools") || true
+            (sudo yum install -y postgresql-devel python3-devel pkgconfig || sudo dnf install -y postgresql-devel python3-devel pkgconfig)
+          elif [ -f /etc/alpine-release ]; then
+            sudo apk add --no-cache build-base postgresql-dev python3-dev
+          else
+            echo "Unsupported Linux distribution: install libpq headers and build tools manually." >&2
+            exit 1
+          fi
+
+      - name: Sync project dependencies
+        run: |
+          if [ -f "pyproject.toml" ]; then
+            uv python install 3.13
+            uv sync --all-extras --dev
+          elif ls requirements*.txt >/dev/null 2>&1; then
+            python -m venv .venv
+            source .venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt || true
+          else
+            echo "No dependency manifest found (pyproject.toml or requirements*.txt)."
+          fi
+
+      - name: Show environment
+        run: |
+          which python
+          python --version
+          which uv || true
+          python -c "import sys,site; print('venv:', sys.prefix); print('site:', site.getsitepackages())"
+
+      - name: Validate migrations
+        env:
+          DB_MODE: mock
+        run: |
+          uv run python - <<'PY'
+          from uns_metadata_sync.migrations.runner import load_migrations
+
+          migrations = load_migrations()
+          if not migrations:
+              raise SystemExit('No migrations found')
+
+          for migration in migrations:
+              if not migration.up_sql.strip():
+                  raise SystemExit(f"Migration {migration.version} missing up SQL")
+              if not migration.down_sql.strip():
+                  raise SystemExit(f"Migration {migration.version} missing down SQL")
+
+          print(f"Validated {len(migrations)} migrations offline")
+          PY
+
+      - name: Lint with ruff and black
+        run: |
+          uv run ruff check .
+          uv run black --check .
+
+      - name: Test with pytest (unit)
+        run: |
+          uv run pytest -v -m unit --cov=. --cov-report=term-missing --cov-fail-under=70
+          # uv run pytest -v -m integration --cov=.
