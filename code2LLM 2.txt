@@ -1,0 +1,2935 @@
+### GET PATAIAS SQL DATA AND PUBLISH IT ### 2025.02 ### BD ###
+
+#RAW
+ ##basePath = "[default]Secil/Portugal/Mortars/Pataias/800 - Electrical Departments/841 - Control Equipment/Edge/InputSilos/"   
+ ##basePath = "[default]Secil/Portugal/Mortars/Pataias/800 - Electrical Departments/841 - Control Equipment/Edge/OutputBatch/"   
+##WatchDogs
+ #"[default]Secil/Portugal/Mortars/Pataias/800 - Electrical Departments/841 - Control Equipment/Edge/Status/WD_UNS"  
+ 
+#NORMALISED 
+ ##SAP (debug only, enviar so por JSON via cirrus Engine
+  ###json_path = "[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Edge/SAP/MIGO
+    ###normPath  = "[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Edge/SAP/MIGO201/
+    ###normPath  = "[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Edge/SAP/MIGO202/
+##HISTORIAN
+ ###normPath = "[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Edge/InputMaterial/
+ ###normPath = "[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Edge/OutputMaterial/
+
+### Mulesoft Topic
+    ### “Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Normalised/Transactions/Production”
+
+"""
+# HOW TO USE:
+from Mortars.Pataias import pataias_query_and_publish
+#basePath = "[default]Secil/Portugal/Mortars/Pataias/800 - Electrical Departments/841 - Control Equipment/Edge"   
+#normPath = "[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Edge"
+#pataias_query_and_publish(basePath, normPath)
+pataias_query_and_publish()
+"""
+
+"""
+{                                            /* TABLES */
+  "PLANT": "STR",                            /* hardcoded: 9630 */
+  "UNIT": "STR",                             /* hardcoded: KG or UN or TO */
+  "MOVEMENT_REASON": "STR",                  /* hardcoded: 999 */
+  "PRODUCTION_HOUR": "STR",                  /* TIME from: dh_producao/dh_consumo/dh_final/... */
+  "QUANTITY": "INT or Float",                /* Valor/Quantidade/Peso/Quant */
+  "COST_CENTER": "STR",                      /* TABLES JOIN */
+  "TRANSACTION": "STR",                      /* hardcoded: MIGO */
+  "MOVEMENT_TYPE": "STR",                    /* hardcoded: 201 or 202 */
+  "MATERIAL_DESC": "STR",                    /* descricao/Descri */
+  "OPERATION": "STR",                        /* hardcoded: Saida Mercadorias */
+  "STORAGE_LOCATION": "STR",                 /* hardcoded: 963H (201:Silo_ou_Saco) or 963J (202: PA Expedição) */
+  "PRODUCTION_DATE": "STR",                  /* DATE from: dh_producao/dh_consumo/dh_final/... */
+  "REFERENCE_DOC": "STR",                    /* hardcoded: Outros/as */
+  "MATERIAL_CODE": "STR"                     /* Codigo/codigo */
+  "ID": "INT"                                /* internal */ 
+}
+"""
+
+# Import necessary modules 
+import time
+from datetime import datetime, timedelta
+from inspect import currentframe, getfile ###
+import re
+import unicodedata
+import traceback
+import json
+import system.tag
+import system.db
+import system
+from system.date import now, secondsBetween ###
+from system.util import getLogger ### 
+from system.dataset import toPyDataSet
+from java.text import SimpleDateFormat
+from java.util import Date
+from java.lang import Exception as JavaException  # Import Java Exception class
+from java.net import URL
+from javax.net.ssl import HttpsURLConnection
+from java.io import OutputStreamWriter
+from com.inductiveautomation.ignition.common.model.values import BasicQualifiedValue, QualityCode
+from com.inductiveautomation.ignition.common.tags.config import BasicTagConfiguration
+from collections import defaultdict
+import socket # debug
+import inspect
+from shared.notifications import send_alarms_teams_webhook, send_sap_teams_webhook   
+from shared.systemCirruslinkEngine import systemCirruslinkEnginePublish, systemCirruslinkEnginePublishManual
+
+# Declare Global Variables
+global resetTags
+global json_en, jsonPerMIGO
+global debug
+global dataBase
+global hostname
+global gatewayname
+global logger
+global sleepTime
+global tryExcept
+global verbose
+global MP_en, PG_en, PS_en, ref_en, WD_en, norm_en, raw_en
+global json2file
+global json_output_dir
+global timestampControl
+global batchTimeout
+global lastProdCode , lastBatchCode
+global delay_between_creations
+global systemTagConfigurations
+global systemTagWrite 
+global jsonTransactionsCounter
+global kg_list, to_list, un_list
+global serverName 
+global sqlColumnsNotToUse 
+global codeSCADA2SAP, codeSCADA2SAP_en
+global materialExcluded
+global serverName 
+global mqttTopic_p, mqttTopic_q, g_tagPath
+global webhook_url_uns_alarms, webhook_url_bd_alarms, webhook_url_pataias_sap
+global error_counter_path, error_on_path
+global error_detected
+#Global Variables:
+
+#Alarm Webhook   (https://www.c-toss.com/webhook-bot)
+webhook_url_uns_alarms = "https://webhookbot.c-toss.com/api/bot/webhooks/78993d8a-70e8-48ee-a7be-f660c1a6fc06"     # UNS Teams Webhook:      : UNS - OT
+webhook_url_bd_alarms = "https://webhookbot.c-toss.com/api/bot/webhooks/21a4d81f-4066-4fa3-9af1-0025dc7f7180"      # BD Personal ALARM       : Public Teams
+webhook_url_pataias_sap =  "https://webhookbot.c-toss.com/api/bot/webhooks/285af975-4511-408a-90e8-9166c059eed9"   # BD Pataias SAP PAYLOADS : Public Teams
+
+error_counter_path = "[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Edge/SAP/MIGO/error_counter"
+error_on_path =     "[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Edge/SAP/MIGO/error_on"
+error_detected = False
+
+dev_not_prod = False #True # SAP Prod or Quality
+debug = False        # DEBUG Mode
+tagsHist = True      # Tags for Canary
+json_en = True       # create a JSON payload
+batchTimeoutLong = 60  #mins # Bulk
+batchTimeoutShort = 15 #min  # Bags
+dataBase = "SCADA_Pataias" #db
+hostname = socket.gethostname() #Host name (Project)
+gatewayname = system.tag.readBlocking(["[System]Gateway/SystemName"])[0].value # client PC
+loggerName = logger_name = 'Mortars_Pataias_BFSD'
+logger = getLogger(loggerName)
+csv = json2file = False    #Producao: False
+jsonPerMIGO = False        #Producao: False
+json2file=False             #Producao: False
+json_output_dir = "C:\\Users\\Administrator\\Desktop\\JSON"  # UNS4 only    
+systemTagConfigurations = 0
+systemTagWrite = 0
+jsonTransactionsCounter = 0
+codeSCADA2SAP_en = False # True: Hardcoded | False : Apply the value from SQL TBL, column alias CODE_SAP
+serverName = "Secil Cloud SpB"  # MQTT server name configured in CirrusLink
+
+
+#################  <GO LIVE 2025.07.07> ###############################################################
+#codes_to_send_to_sap = ["ALL_TO_QUALITY"]  # Filters the codes to send to SAP Production SAP-P01
+## If void -> sends everything to Production | If ["ALL_TO_QUALITY"] -> sends everything to Quality ...
+## ... if we want to send everything to quality add a non existent code, e.g. codes_to_send_to_sap = ["ALL_TO_QUALITY"] 
+# JULY: #
+#AP130 - REDUR Médio | AP250 - Plan Classic | AP440 - ISOVIT Fibra |
+#codes_to_send_to_sap = ["AP130", "AP250", "AP440""] #<---2025.07.07
+
+#################  <GO LIVE 2025.08.06> ###############################################################
+#################   EDIT HERE:  _-----> ###############################################################
+# AUGUST 6:                                                                                         ###
+codes_to_send_to_sap = ["ALL_TO_QUALITY"]  # Filters the codes to send to SAP Production SAP-P01    ###
+# If void sends everything to Production | If e.g. "ALL_TO_QUALITY" sends everything to QA          ###
+#Uncomment here:                                                                                    ###
+#codes_to_send_to_sap = ["AP130", "AP250", "AP440""] #<---2025.08.06 (not updated) #remove line 153 ###
+#######################################################################################################
+
+g_tagPath =   "[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Edge/SAP/MIGO/jsonIgnition"
+mqttTopic_q = "Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Normalised/Transactions_Test/Production"
+mqttTopic_p = "Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Normalised/Transactions/Production"
+#note: if we want to send everything to quality add a non existent code, e.g. codes_to_send_to_sap = ["ALL_TO_QUALITY"] 
+
+if gatewayname == "UNSMACVM-WIN11":
+    sleepTime = 0.0001 #Segundos, Dar tempo para o script que detecta a mudança de tag atuar e colocar este payload no broker
+    tryExcept = False
+    verbose = True
+    MP_en = True
+    PG_en = True 
+    PS_en = True
+    norm_en = True
+    ref_en = True
+    WD_en = True
+    timestampControl = True
+    resetTags = True
+    delay_between_creations = 0.01
+    caller_name_en = True
+    raw_en = True and tagsHist   # Edge Tags 
+    norm_en = True and tagsHist  # Normalised Tags 
+else:
+    sleepTime = 0.1 #Segundos, Dar tempo para o script que detecta a mudança de tag atuar e colocar este payload no broker
+    tryExcept = True          #Producao: True
+    verbose = True           #Producao: False
+    MP_en = True              #Producao: True
+    PG_en = True              #Producao: True 
+    PS_en = True              #Producao: True
+    norm_en = True            #Producao: True 
+    ref_en = True
+    WD_en = True              #Producao: True
+    timestampControl = True  #Producao: True
+    csv = False               #Producao: True
+    resetTags = True
+    delay_between_creations = 2
+    caller_name_en = False      #Producao: False
+    raw_en = False and tagsHist   # Edge Tags           #####
+
+# Define the epoch globally to avoid redefinition
+EPOCH = datetime(1970, 1, 1)
+resetTags = resetTags and (raw_en or norm_en)
+
+#SQL columns to not publish
+#sqlColumnsNotToUse = ['BATCH', 'CODE_SAP', 'DESTINO', 'FAMILIA', 'FORMULA', 'MATERIAL_CODE_COMPLETE', 'PESO', 'PROD_BATCH', 'PRODUCTION_DATETIME', 'PRODUTO', 'CODE_SAP_OPERATOR', 'LOTE_ORIGEM', 'SEQOF', 'SILO', 'TIPO']
+sqlColumnsNotToUse = ['BATCH', 'CODE_SAP', 'CODE_SAP_OPERATOR', 'DESTINO', 'FAMILIA', 'FORMULA', 'LOTE_ORIGEM', 'MATERIAL_CODE_COMPLETE', 'PESO', 'PROD_BATCH', 'PRODUCTION_DATETIME', 'PRODUTO', 'SEQOF', 'SILO', 'TIPO']
+
+#materialExcluded = ["", "-", "?", "0"]
+#QUALITY TESTS - JULY AUGUST 2025  # TODO: to remove later
+
+materialExcluded = ["", "-", "?", "0"]
+
+"""
+materialExcluded = [
+    "", "-", "?", "0",
+    "AH130", "AH160", "AH177", "AH178", "AH196", "AH250", "AH251", "AH252", "AH295", "AH300",
+    "AH301", "AH440", "AH441", "AH442", "AH443", "AH461", "AH462", "AH463", "AH464", "AH465",
+    "AH466", "AH467", "AH468", "AH470", "AH472", "AH474", "AH476", "AH500", "AH510", "AH520",
+    "AH560", "AH601", "AH613", "AH620", "AH701", "AH705", "AH715", "AH720", "AH730", "AH731",
+    "AH732", "AH736", "AH738", "AH740", "AH782", "AH796", "AH801", "AH820", "AI196", "AI200",
+    "AI210", "AI300", "AI301", "AI350", "AI439", "AI440", "AI441", "AI442", "AI443", "AI454",
+    "AI478", "AI520", "AI610", "AI613", "AI705", "AI715", "AI730", "AI731", "AI732", "AI735",
+    "AI760", "AJ461", "AI460", "AI723", "AI724", "AI725", "AI718"
+]
+"""
+#################  <GO LIVE 2025.08.06> Part2 #########################################################
+#################   EDIT HERE:  ------>       #########################################################
+# AUGUST 6:                                                                                         ###
+# Uncomment here:                                                                                   ###
+# materialExcluded = ["", "-", "?", "0"]  #delete line 208                                          ###
+#######################################################################################################
+
+codeSCADA2SAP = {
+    "M001": "84097",
+    "M002": "84094",
+    "M003": "55342",
+    "M004": "84095",
+    "M005": "76163",
+    "M006": "64996",
+    "M007": "78040",
+    "M008": "AM55",
+    "M009": "65232",
+    "M010": "57036",
+    "M011": "65178",
+    "M012": "62740",
+    "M013": "65161",
+    "M014": "81526",   # ou "77345" ??
+    "M015": "81625",   # ou "65610" ??
+    "M016": "63692",
+    "M017": "0",       #ELIMINAR M017  "74887",
+    "M018": "70990",   #codigo "82452" para eliminar
+    "M019": "84138",
+    "M020": "0",       # no SAP code provided !!!
+    "M021": "73684",
+    "M022": "79519",
+    "M023": "70913",
+    "M024": "64998",
+    "M025": "75597",
+    "M026": "74888",
+    "M027": "73812",
+    "M028": "65296",
+    "M029": "0",      # no SAP code provided !!!
+    "M030": "73697",
+    "M031": "79640",
+    "M032": "74885",
+    "M033": "0",      # no SAP code provided !!!
+    "M034": "70912",
+    "M035": "72426",
+    "M036": "79204",
+    "M037": "72405",
+    "M038": "0",       # Residuo
+    "M039": "63870", 
+    "M040": "0",       # no SAP code provided !!!
+    "M041": "71043",
+    "M042": "64999",
+    "M043": "71580",
+    "M044": "73700",
+    "M045": "73627",
+    "M046": "77434",
+    "M047": "62689",
+    "M048": "64546", 
+    "M049": "0",       # Teste: 62689"
+    "M050": "73698", 
+    "M051": "0",      # no SAP code provided !!!
+    "M052": "73453",
+    "M053": "0",      # no SAP code provided !!!
+    "M054": "72424",
+    "M055": "84146",
+    "M056": "65164",
+    "M057": "73773",
+    "M058": "64547",
+    "M059": "74712",
+    "M060": "72425",
+    "M061": "64612",
+    "M062": "0",       # no SAP code provided
+    "M063": "0",       # no SAP code provided
+    "M064": "62688",
+    "M065": "0",       # no SAP code provided
+    "M066": "63871",
+    "M067": "79205",
+    "M068": "0",       # no SAP code provided
+    "M069": "64120",
+    "M070": "64526",
+    "M071": "65292",
+    "M072": "64751",
+    "M073": "65233",
+    "M074": "63657",
+    "M075": "71044",
+    "M076": "80710",
+    "M077": "0",       # no SAP code provided
+    "M078": "0",       # no SAP code provided
+    "M079": "74887",
+    "M080": "80532",
+    "M081": "80838",
+    "M082": "80801",
+    "M083": "0",       # no SAP code provided
+    "M084": "81495",
+    "M085": "0",       # no SAP code provided
+    "M086": "0",       # FORMULA DE TESTE  "81526",
+    "M087": "50530",
+    "M088": "0",       # no SAP code provided
+    "M089": "64545",
+    "M090": "81191",
+    "M091": "81681",
+    "M092": "0",       # no SAP code provided
+    "M093": "0",       # no SAP code provided
+    "M094": "0",       # Codigo a eliminar "82452",
+    "M095": "0",       # no SAP code provided
+    "M097": "0",       # no SAP code provided
+    "M098": "82372",
+    "M099": "0",       # no SAP code provided
+    "M100": "84706",
+    "M101": "0",       # no SAP code provided
+    "M102": "73685",
+    "M103": "81842",
+    "M104": "82240",
+    "M105": "84730",
+    "M106": "0",      # no SAP code provided
+    "M107": "0"       # no SAP code provided !!!
+}
+
+#SAP list:
+# List for UM básica "KG"
+kg_list = [
+    "64612", "64546", "65549", "64751", "73685", "73812", "79519", "63871",
+    "80801", "61920", "64996", "M046985MP", "65164", "84146", "M050670MP",
+    "M050632MP", "64637", "76163", "M046981MP", "86150", "80838", "M047945MP",
+    "72425", "M050350MP", "M050351MP", "74712", "M050596MP", "72426", "77434",
+    "M050415MP", "72424", "79640", "M050104MP", "65232", "M037524MP", "73700",
+    "81760", "71044", "73453", "M050256MP", "84240", "73773", "M050532MP",
+    "M050533MP", "M050639MP", "64526", "65293", "MP008", "M050656MP", "MP006",
+    "61857", "M047112MP", "61768", "79205", "71580", "84730", "70913", "73627",
+    "74590", "64999", "75597", "M050531MP", "M050246MP", "81526", "64998",
+    "63870", "81681", "64997", "81842", "84299", "M050530MP", "M050677MP",
+    "81191", "75104", "M050300MP", "84426", "65178", "M050672MP", "MP013",
+    "64120", "78040", "M050380MP", "MP026", "63692", "73775", "MP007", "62740",
+    "82452", "62588", "62647", "63856", "62287", "84138", "M046973MP", "70912",
+    "62312", "65233", "MP009", "63691", "M050193MP", "81495", "M046965MP",
+    "M050535MP", "73698", "MP025", "63021", "M050473MP", "74888", "63657",
+    "65292", "81625", "74887", "82926", "62836", "83431", "61898", "M050559MP",
+    "62689", "62688", "63855", "73697", "M047929MP", "64547", "70937", "79204",
+    "80710", "82372", "82372", "84706", "70990", "65161", "71043", "65296",
+    "77345", "73684", "64545", "80532", "74885", "M050178MP", "65610",
+    "M050263MP", "M050524MP"
+]
+
+# List for UM básica "TO"
+to_list = [
+    "AP505", "AP545", "67054", "AP515", "AP575", "AP565", "AP765", "72330",
+    "72342", "57036", "AM51", "AM50", "AM50", "AM55", "A000036MC", "84097",
+    "84094", "84096", "84095", "AMPI55", "55342", "72405", "AM73", "AM75",
+    "AP255", "AP265", "AP175", "AP176", "AP125", "AP126", "AP155", "AP145",
+    "AP146", "74215"
+]
+
+# List for UM básica "UN"
+un_list = [
+    "62411", "AL451", "AP454", "AN462", "AP462", "AN461", "AP461", "AP464",
+    "AP463", "AP475", "AP401", "AP403", "AP402", "AP400", "AZ124", "AZ128",
+    "AZ108", "AZ101", "AZ112", "AZ118", "AZ114", "AZ127", "AZ113", "AZ120",
+    "AZ122", "AZ121", "AZ110", "AZ102", "AZ105", "AZ107", "AZ104", "AZ126",
+    "AZ103", "AZ123", "AZ111", "AZ106", "AZ115", "AZ109", "AZ117", "AZ116",
+    "AZ125", "AZ130", "AZ129", "AZ119", "AZ224", "AZ228", "AZ208", "AZ201",
+    "AZ212", "AZ218", "AZ214", "AZ227", "AZ213", "AZ221", "AZ220", "AZ222",
+    "AZ210", "AZ202", "AZ205", "AZ207", "AZ204", "AZ226", "AZ203", "AZ223",
+    "AZ211", "AZ206", "AZ215", "AZ209", "AZ217", "AZ216", "AZ225", "AZ229",
+    "AZ219", "AM508", "AM497", "AM510", "AM500", "AM484", "AM504", "AM505",
+    "AM502", "AM501", "AM503", "AM498", "AM492", "AM520", "AM523", "AM525",
+    "AM522", "AM494", "AM521", "AM524", "AM526", "AM499", "AM496", "AM507",
+    "AM506", "AM509", "AP450", "AP426", "AP425", "AP427", "AP421", "AP466",
+    "AL465", "AP465", "AP420", "AP422", "AP471", "AP470", "AP469", "AL468",
+    "AN468", "AP468", "AL467", "AN467", "AP467", "AL476", "AN476", "AP476",
+    "AP411", "AP410", "AP474", "AP405", "AP430", "AP455", "AP456", "AL452",
+    "AP452", "AP472", "AP531", "AP535", "AP520", "AP532", "AP510", "AP512",
+    "AP533", "AP534", "AL500", "AM691", "AN500", "AP500", "AL620", "AN620",
+    "AP620", "AP721", "AP530", "AP590", "AP277", "AP716", "AP253", "AP256",
+    "AP200", "AP270", "AP180", "AM765", "AL763", "AP763", "AP766", "AR760",
+    "AR757", "AR761", "AR758", "AL750", "AP750", "AP751", "AP767", "AP768",
+    "AP769", "AM639", "AM683", "AM878", "AM877", "AM881", "AM889", "AM880",
+    "AM879", "AM890", "AP783", "AP641", "AP643", "AP642", "AL640", "AP640",
+    "AL644", "AP644", "AL786", "AP786", "AL785", "AN785", "AP785", "AS785",
+    "AL780", "AL789", "AP210", "AP784", "AL782", "AP782", "AP997", "AL787",
+    "AP781", "AL788", "AP788", "AL409", "AN409", "AP409", "AL408", "AN408",
+    "AP408", "AL429", "AN429", "AP429", "AL428", "AN428", "AP428", "AL423",
+    "AN423", "AP423", "AM60", "M620345MT", "AN761", "AS761", "73735", "AM65",
+    "AP433", "AP432", "AM495", "AM487", "AM486", "AM481", "AM480", "AM493",
+    "AM483", "AM482", "AM489", "AM488", "AM485", "AM491", "AM490", "AP446",
+    "AM882", "AM883", "AM884", "AM885", "AM886", "AM887", "AL295", "AP295",
+    "AP196", "AP595", "AP195", "AP906", "AP605", "AP490", "AP795", "AM307",
+    "AM306", "AM309", "AM308", "AM312", "AM302", "AM311", "AM314", "AM303",
+    "AM313", "AM321", "AM322", "AM323", "AM324", "AM326", "AM325", "AM327",
+    "AM328", "AM316", "AM304", "AM315", "AL301", "AN301", "AP301", "AL300",
+    "AP300", "AM70", "AR791", "AR793", "AL796", "AP796", "AR790", "AP790",
+    "AP854", "AP856", "AM702", "AP852", "AM703", "AM704", "AP853", "AM707",
+    "AM709", "AM710", "AM711", "AM712", "AM713", "AM714", "AP855", "AM715",
+    "AM708", "AP857", "AM721", "AM722", "AM723", "AM724", "AM726", "AM727",
+    "AM730", "AP820", "AM562", "AM571", "AM928", "AP851", "AM872", "AM875",
+    "AM905", "AP909", "AM876", "AM580", "AM581", "AM685", "AM865", "AM862",
+    "AM870", "AM902", "AM285", "AM286", "AM283", "AM284", "AM276", "AM277",
+    "AM278", "AM279", "AM280", "AM281", "AM282", "AM274", "AM275", "AL443",
+    "AP443", "AP442", "AM269", "AL440", "AN440", "AP440", "AR440", "AL441",
+    "AN441", "AP441", "AR441", "AM224", "AP610", "AM867", "AM268", "AM262",
+    "AM267", "AM162", "AM170", "AM255", "AM256", "AM257", "AM258", "AM260",
+    "AM292", "AM296", "AM295", "AM294", "AM290", "AM906", "AM901", "AM917",
+    "AM924", "AP801", "AM012", "AM015", "AM021", "AM802", "AP802", "AM803",
+    "AP803", "AM804", "AP804", "AP806", "AM807", "AP807", "AM809", "AP809",
+    "AM810", "AP810", "AP811", "AM812", "AP812", "AM813", "AP813", "AM814",
+    "AP814", "AM815", "AP815", "AP816", "AP817", "AP818", "AP819", "AP821",
+    "AM805", "AP805", "AM808", "AP808", "AM821", "AP822", "AP823", "AP824",
+    "AM824", "AP825", "AM825", "AP826", "AM826", "AP827", "AM827", "AP828",
+    "AM828", "AP829", "AP830", "AM830", "AP831", "AP861", "AM104", "AM451",
+    "AM832", "AM833", "AM834", "AP864", "AM836", "AM837", "AM839", "AM840",
+    "AM841", "AM842", "AM843", "AM844", "AM835", "AP868", "AM851", "AM852",
+    "AM853", "AM856", "AM857", "AM670", "AM531", "AM532", "AM553", "AM904",
+    "AM903", "AM998", "AP998", "AM899", "AM731", "AM733", "AM744", "AM732",
+    "AM734", "AM736", "AM737", "AM530", "AM100", "AL453", "AP453", "AM411",
+    "AM412", "AM415", "AM416", "AM417", "AM418", "AM419", "AM420", "AM422",
+    "AM425", "AM423", "AM426", "AM413", "AM414", "AM431", "AM432", "AM437",
+    "AM438", "AM435", "AM436", "AM434", "AM366", "AM351", "AM367", "AM352",
+    "AM368", "AM353", "AM369", "AM354", "AM370", "AM355", "AM371", "AM356",
+    "AM372", "AM357", "AM373", "AM358", "AM374", "AM359", "AM375", "AM360",
+    "AM376", "AM361", "AM362", "AM378", "AM363", "AM364", "AM380", "AM365",
+    "AM427", "AM429", "AM350", "AM349", "AM396", "AM381", "AM397", "AM382",
+    "AM398", "AM383", "AM399", "AM384", "AM400", "AM385", "AM401", "AM386",
+    "AM402", "AM387", "AM403", "AM388", "AM404", "AM389", "AM405", "AM390",
+    "AM406", "AM391", "AM392", "AM408", "AM393", "AM409", "AM394", "AM410",
+    "AM395", "AM430", "AM299", "AM980", "AP775", "AP774", "AP776", "AP770",
+    "AP771", "AP772", "AP773", "AM210", "AM211", "AM212", "AM213", "AM214",
+    "AM216", "AM232", "AM226", "AM227", "AM990", "AM229", "AM248", "AM250",
+    "AM253", "AM254", "AM240", "AM241", "AM661", "AM242", "AM244", "AM246",
+    "AM171", "AM179", "AL250", "AN250", "AP250", "AP259", "AL251", "AP251",
+    "AP257", "AP258", "AL252", "AN252", "AP252", "AR260", "AL254", "AP254",
+    "AM760", "AM761", "AM740", "AM745", "AL764", "AP764", "AP759", "AP691",
+    "AP732", "AP736", "AL744", "AP743", "AP746", "AP752", "AP756", "AP734",
+    "AP753", "AP754", "AP755", "AP748", "AP749", "AP745", "AP742", "AR742",
+    "AR744", "AR751", "AR755", "AR745", "AR743", "AR798", "AR746", "AR747",
+    "AR748", "AP350", "AP996", "AP741", "AP692", "AP690", "AP737", "AP733",
+    "AN730", "AP730", "AP757", "AP740", "AP735", "AR735", "AL740", "AP738",
+    "AL731", "AN731", "AP731", "AP992", "AP717", "AP715", "AL739", "AP739",
+    "AL701", "AP701", "AL705", "AP705", "AM297", "AP720", "AR627", "AL491",
+    "AP491", "AP492", "AP990", "AP991", "AP151", "AP152", "AM653", "AM654",
+    "AM690", "AR112", "AR110", "AR105", "AR111", "AR106", "AL560", "AP560",
+    "AR130", "AR100", "AL177", "AN177", "AP177", "AP160", "AN120", "AP120",
+    "AP121", "AN178", "AP178", "AM634", "AM633", "AR623", "AR624", "AL600",
+    "AP600", "AP601", "AM632", "AR562", "AM298", "AP110", "AP111", "AP150",
+    "AP140", "AP141", "AP170", "AP171", "AP100", "AP101", "MP014", "MP015",
+    "MP010", "MP031", "MP012", "MP032", "AM681", "AM682", "AP272", "AP283",
+    "AP271", "AP274", "AL275", "AP275", "AP273", "AP284", "AP285", "AP286",
+    "AP276", "AP279", "AP280", "AP278", "AP305", "AP302", "AP303", "AP304",
+    "AP281", "AM77", "AM72", "AM71", "AM684", "AP787", "73728", "AM631",
+    "AM620", "AM621", "AM622", "AM652", "AM651", "AM650", "AM640", "AM642",
+    "AM920", "AM630", "74078", "AP439", "AP478", "M620321MT", "AP550", "AM970",
+    "AM971", "AM461", "AM460", "AP451", "AP447", "AP448", "AP449", "AP445",
+    "AP444", "AP649", "AP760", "AP762", "AS476", "AS620", "AP761", "AS301",
+    "AS252", "AS730", "AS731", "AS120", "AR971", "AM641"
+]
+
+
+def id_payload(message):
+	# Regular expression to extract ID value
+	match = re.search(r"'ID':\s*(\d+)", message)
+	if match:
+	    id = int(match.group(1))
+	else:
+	    id = 0
+	return id    
+	
+
+def replace_angle_brackets_with_square_brackets(text):
+    if text is not None:
+        return text.replace("<", "[").replace(">", "]")
+    return text
+
+
+def ResetTagsValue(
+    basePath="[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Normalised/Output Materials", 
+    batchTagPath="[default]Secil/Portugal/Mortars/Pataias/800 - Electrical Departments/841 - Control Equipment/Edge/Status/lastProdCode"):
+    """
+    Resets the values of all tags in a specified folder to 0, except for the current batch tag.
+
+    This function iterates through all tags in a given folder and sets their value to 0, 
+    excluding the tag whose name matches the current batch tag. The reset process is logged 
+    for debugging purposes.
+
+    Parameters:
+        basePath (str): The base path containing the tags to be reset.
+        batchTagPath (str): The path to the tag representing the current batch, which will not be reset.
+
+    Raises:
+        Exception: If there is an error resetting any tag.
+
+    Logs:
+        Skipped and reset tags for debugging purposes.
+    """
+    ### Usado num script de Tag Change | Não usado na main function ###
+    #Reset Values to 0, except atual baatch  ############TODO: PENSAR NISTO.........
+    #Usando num script de Tag Cahnge
+    # Define the path where the tags are located    
+    #basePath = a copiar /Normalised/Output Materials"
+    #batchTagPath = Atual Bacth Material Code
+    
+    # Get all tags in the folder
+    tags = system.tag.browse(basePath, {}).getResults()
+    # Read the name of the tag to exclude
+    excludeTagName = system.tag.readBlocking([batchTagPath])[0].value
+    # Define the value to reset to
+    resetValue = 0
+    
+    # Iterate through the tags and reset their value
+    for tag in tags:
+        # Construct the full tag path
+        fullTagPath = "{}/{}".format(basePath,tag['name'])
+        try:
+            if tag['name'] == excludeTagName:
+                if debug:
+                    print("Skipping tag {} as it matches the actual batch tag name.".format(fullTagPath))
+                continue
+            # Write the reset value
+            bulkWrite([fullTagPath], [resetValue], blocking=True) # system.tag.writeBlocking([fullTagPath], [resetValue])
+            # Optionally log the reset action
+            if debug:
+                print("Reset tag {} to {}".format(fullTagPath,resetValue))
+        except Exception as e:
+            # Handle any errors
+            print("ResetTagsValue - Error resetting tag {}: {}".format(fullTagPath, e))
+
+
+def goUpLevels(path, levels):
+    """
+    Trims a specified number of levels from the end of a path.
+
+    This function removes the last N levels from a given path string and reconstructs 
+    the shortened path.
+
+    Parameters:
+        path (str): The input path to be trimmed.
+        levels (int): The number of levels to remove from the end of the path.
+
+    Returns:
+        str: The reconstructed path with the specified number of levels removed.
+    """
+    # Step 1: Remove 'normPath=', quotes, and parentheses
+    path = path.replace('normPath=', '').strip('"()')
+    # Step 2: Split the path
+    components = path.split('/')
+    # Step 3: Remove the last N levels
+    if levels <= len(components):
+        components = components[:-levels]
+    else:
+        components = []
+    # Step 4: Reconstruct the path
+    new_path = '/'.join(components)
+    
+    return new_path
+
+
+def ReferencedTagsPerPath(
+    path="[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer",
+    folderName="Output Materials"):
+    """
+    Creates reference tags in a target path based on tags from a source folder.
+
+    This function browses a source folder, retrieves tags, and creates corresponding
+    reference tags in a Normalised folder. Each tag references specific properties
+    such as QUANTITY, PRODUCTION_DATE, and PRODUCTION_HOUR.
+
+    Parameters:
+        path (str): The base path for the tags.
+        folderName (str): The name of the folder containing the source tags.
+
+    Raises:
+        Exception: If there is an error creating the reference tags.
+
+    Logs:
+        Debugging information about tag configurations and creation status.
+    """
+
+    #global systemTagConfigurations
+    global kg_list, to_list, un_list, logger
+    # Define source and target paths
+    source_path = path + "/Edge/" + folderName
+    target_path = path + "/Normalised/" + folderName
+
+    # Browse the source path for folders
+    folders = system.tag.browse(source_path).results
+    if debug:
+        print("ReferencedTagsPerPath", source_path, target_path, folders)
+
+    # List to hold tag configurations
+    tagConfigs = []
+    target_paths = []
+    for folder in folders:
+        if folder["hasChildren"]:  # Only process folders
+            folder_name = folder["name"]
+            folder_full_path = "{}/{}".format(source_path, folder_name)
+
+            # Fetch all tags in the current folder
+            tags = system.tag.browse(folder_full_path).results
+            
+            # Configuration for the base tag (QUANTITY reference)
+            new_tag_path = "{}/{}".format(target_path, folder_name)
+            tagConfig = {
+                "name": folder_name,
+                "dataType": "Float4",
+                "valueSource": "reference",  # Create as a reference tag
+                "tagType": "AtomicTag",
+                "sourceTagPath": folder_full_path + "/QUANTITY",  # Reference the QUANTITY tag
+            }
+            if debug:
+                print(tagConfig)
+            # Create or overwrite the new tag
+            try:
+                if not system.tag.exists(new_tag_path):
+                    properties = True
+                    if properties:  # Add other tags as reference tags within the folder
+                        for tag in tags:
+                            tag_name = tag["name"].strip()
+                            tag_name = tag_name.lower()
+                            tag_name = tag_name[0].upper() + tag_name[1:]
+
+                            if tag_name == "UNIT": tag_name = "EngUnit"
+                            tag_full_path = folder_full_path + "/" + tag_name
+
+                            if (tag_name != "Quantity" and tag_name != "Name"):
+                                # Create a reference tag inside the folder for each additional tag
+                                property_reference_config = {tag_name: tag["value"].value}
+                                tagConfig.update(property_reference_config)
+                        #if  folderName == "Input Materials":
+                        #    MPUnit = "TO" if folder_name in to_list else "KG" #else: kg_list
+                        #    tagConfig.update({"EngUnit": MPUnit})
+                    ##system.tag.configure(target_path, [tagConfig], "o")
+                    tagConfigs  = tagConfigs  + [tagConfig]
+                    target_paths = target_paths + [target_path]
+                else:
+                    if debug:
+                        print("Tag Exists: {}".format(new_tag_path))
+
+            except Exception as e:
+                print(
+                    "> TagCreation: Failed to create tag at {}: {}".format(
+                        new_tag_path, str(e)
+                    )
+                )
+                logger.error(
+                    "Failed to create tag at {}: {}".format(new_tag_path, str(e))
+                ) #system.util.getLogger("TagCreation")
+                
+    # Configure all tags in a single batch
+    if debug:
+        print("NORM BULK:", target_paths)
+        for tagConfig in tagConfigs:
+            print(tagConfig["name"], tagConfig["sourceTagPath"])
+    
+    try:
+        if tagConfigs:
+            bulkConfig(target_paths, tagConfigs, "o") # system.tag.configure(target_path, tagConfigs, "o")
+            #systemTagConfigurations += 1
+            #print("<<{:03d}>> systemTagConfigurations_ReferencedTagsPerPath".format(systemTagConfigurations))
+            if debug:
+                print("Tags configured successfully in batch")
+    except Exception as e:
+        print(
+            "> TagCreation: Failed to configure tags in batch at {}: {}".format(
+                target_path, str(e)
+            )
+        )
+        logger.error("Failed to configure tags in batch at {}: {}".format(target_path, str(e))) #system.util.getLogger("TagCreation")
+
+
+def systemTagExistsOrCreate_Bulk(basePath, tags_path, tagsName, values, documentations):
+    """
+    Checks if tags exist in the Ignition system at the specified path, and creates a list to be ready for a bulk configuration, if they do not exit.
+    Appends and Returns: tags_path (without changes), tagConfigs (created here) to a  future bulk config.
+    [optional - Not implemented] Appends and Returns:  tags_path, values, to a future bulk write.
+    - Infers the data type of the tag based on its name.
+    - Adds engineering unit based on naming conventions.
+
+    Args:
+        basePath (str): The base path where the tag should be located.
+        tags_path (list of str): Full paths to the tags.
+        tagsName (list of str): Names of the tags.
+        values (list): Initial values to assign to the tags.
+        #qvalues (list): Qualified values (BasicQualifiedValue) to write to the tags.
+        documentations (list of str): Documentation strings for the tags.
+        debug (bool): If True, prints debugging information.
+        verbose (bool): If True, prints detailed progress information.
+
+    Returns:
+        Tuple: tagConfigs (tratado aqui), tags_path (=), basePaths (lista)  -> TagConfigure
+
+    #basePaths, tagConfigs, tags_path = systemTagExistsOrCreate_Bulk(basePath, tags_path, tagsName, values, documentations)
+    """
+
+    tagConfigs = []  # List to store configurations for tags to be created
+    basePaths = [] #??
+    try:
+        # Loop through the input lists to check tag existence and prepare configurations
+        if isinstance(tags_path, list):
+             pass
+        else:
+            tags_path = tags_path if isinstance(tags_path, list) else [tags_path]
+            tagsName = tagsName if isinstance(tagsName, list) else [tagsName]
+            values = values if isinstance(values, list) else [values]
+            documentations = documentations if isinstance(documentations, list) else [documentations]       
+        for tag_path, tagName, value, documentation in zip(tags_path, tagsName, values, documentations):
+            #print("::DENTRO LOOP: tag_path:{} tagName:{} value:{} documentation:{}".format(tag_path, tagName, value, documentation))
+            # Check if the tag exists
+            if not system.tag.exists(tag_path):
+                 # Infer the data type of the tag
+                data_type = infer_data_type(tagName)
+                if debug:
+                    print('|{} is a {}:{}|'.format(tagName, data_type, value))
+
+                # Prepare the tag configuration
+                tagConfig = {
+                    "name": tagName,
+                    "dataType": data_type,
+                    "tagType": "AtomicTag",
+                    "value": value,
+                    "documentation": documentation
+                }
+
+                # Add engineering unit based on naming convention
+                if tagName.lower() == "quantity":
+                    if 'InputSilos' in basePath: 
+                        tagConfig["engUnit"] = "to or kg"  # kg
+                    else:
+                        tagConfig["engUnit"] = "to, kg or un."
+
+                # Add the configuration to the list
+                tagConfigs.append(tagConfig)
+                basePaths.append(basePath) #??
+        if tagConfigs and debug:
+            for tagConfig, tag_path in zip(tagConfigs, tags_path):
+                print("Create lists with:{}\n{}\n".format(tagConfig, tag_path))
+    except Exception as e:
+        print("Error in systemTagExistsOrCreate_Bulk: {}".format(str(e)))
+        return [], [], []
+    
+    return basePaths, tagConfigs, tags_path
+
+
+def bulkConfig(basePaths, tagConfigs, collisionPolicy="o"):
+    """
+    Configures tags in bulk using system.tag.configure.
+
+    This function groups tag configuration dictionaries by their respective base paths and 
+    iterates over each group to create or update tags in Ignition. For each distinct base path,
+    it calls system.tag.configure with the specified collision policy, pauses for a short duration 
+    (determined by the global variable delay_between_creations), and increments the global counter 
+    systemTagConfigurations. Debug information is printed if the global debug flag is set.
+
+    Parameters:
+        basePaths (list or str): A list of base paths (or a single base path) where the tags should be configured.
+        tagConfigs (list or dict): A list of tag configuration dictionaries (or a single configuration dictionary).
+        collisionPolicy (str, optional): A string indicating how to handle tag name collisions. 
+                                         Default is "o" (overwrite).
+
+    Side Effects:
+        - Creates or updates tags in the Ignition tag hierarchy via system.tag.configure.
+        - Increments the global systemTagConfigurations counter.
+        - Introduces a delay between configuration calls as defined by delay_between_creations.
+        - Prints debug output if debugging is enabled.
+
+    Returns:
+        None
+    """ 
+    # Bulk - create tags if there are any configurations
+    global systemTagConfigurations, delay_between_creations, debug, caller_name_en
+    m=False
+    if not basePaths or not tagConfigs:
+        return
+
+    # Check if multiple basePaths exist
+    if debug and ( len(set(basePaths)) > 1 and isinstance(basePaths, list) ):
+        print("!! !! Several basePaths <{}> with {}".format(len(set(basePaths)), basePaths))
+        m=True
+    #else:
+        #print("!! :) Single basePath   <{}> with {}".format(len(set(basePaths)), basePaths))
+    if not isinstance(basePaths, list):
+        basePaths=[basePaths]
+    if not isinstance(tagConfigs, list):
+        tagConfigs=[tagConfigs]
+    
+    # Group tagConfigs by basePath
+    grouped = defaultdict(list)
+    for basePath, tagConfig in zip(basePaths, tagConfigs):
+        grouped[basePath].append(tagConfig)
+
+    distinct_basePaths = list(grouped.keys())
+    tagConfigsGrouped = list(grouped.values())
+
+    #if m and debug:
+        #print("<<<bulkConfig>>>  basePaths vs tagConfigs ", len(distinct_basePaths), len(tagConfigsGrouped))
+        #print("Distinct BasePaths:", distinct_basePaths)
+        #print("Grouped Values:", tagConfigsGrouped)
+
+    if tagConfigsGrouped:
+        for basePath, tags in zip(distinct_basePaths, tagConfigsGrouped):
+            if m and False:
+                print("<<<bulkConfig>>>  basePaths vs tagConfigs ", len(distinct_basePaths), len(tagConfigsGrouped))
+                print("BasePath:", basePath)
+                print("Grouped Values:", tags)
+                print("-" * 40)
+        if debug:
+            print("Configuring tags in bulk: {}".format(tagConfigsGrouped))
+        
+        # Bulk Create Tags
+        for basePath, tags in zip(distinct_basePaths, tagConfigsGrouped):
+            system.tag.configure(basePath, tags, collisionPolicy)
+            time.sleep(delay_between_creations)
+            systemTagConfigurations += 1
+        #systemTagConfigurations += 1
+        
+        # Get calling function name
+        try:
+            caller_name = inspect.stack()[1][3] if caller_name_en else "UNAVAILABLE@CLOUD"
+        except IndexError:
+            caller_name = "UNKNOWN"
+
+        n = sum(len(tags) for tags in tagConfigsGrouped)
+        if verbose:
+            print("<<{:03d}>> SystemTagConfigurationsBULK called by <<{}>> with {} tags  ->  in {}]".format(
+            systemTagConfigurations, caller_name, n, distinct_basePaths))
+
+        if debug:
+            print("Tags successfully configured in bulk.")
+
+
+def bulkWrite(tagPaths, values, blocking=True):
+    """
+    Writes tag values in bulk to Ignition tags using either a blocking or asynchronous call.
+
+    This function accepts a list of tag paths and corresponding values and writes them in bulk. 
+    If the 'blocking' flag is True, it uses system.tag.writeBlocking to ensure a synchronous update;
+    otherwise, it calls system.tag.writeAsync for an asynchronous operation. The function also increments 
+    a global counter (systemTagWrite) and prints debug information if the debug flag is enabled.
+
+    Parameters:
+        tagPaths (list or str): A list of tag paths (or a single tag path) where the values should be written.
+        values (list): A list of values corresponding to each tag path.
+        blocking (bool, optional): If True, the write operation is blocking (synchronous). Defaults to True.
+
+    Side Effects:
+        - Writes values to tags using Ignition's system.tag.writeBlocking or system.tag.writeAsync.
+        - Increments the global systemTagWrite counter.
+        - Outputs debug messages if debugging is enabled.
+
+    Returns:
+        None
+    """
+    # Bulk - Write tags with new values
+    global systemTagWrite  
+    if not values:
+        return
+    if tagPaths:
+        if debug:
+           print("Writing tags in bulk to paths: {}".format(tagPaths))
+        
+        #Write values to tags
+        if blocking:
+            system.tag.writeBlocking(tagPaths, values)
+        else: 
+            system.tag.writeAsync(tagPaths, values)
+        systemTagWrite+=1
+        # Look at the call stack and get the name of the calling function
+        caller_name = inspect.stack()[1][3] if caller_name_en else "UNAVAILABLE@CLOUD"
+        n=len(tagPaths) if isinstance(tagPaths, list) else 1
+
+        if debug:
+            print("(({:03d})) system.tag.writeBlockingBULK called by <<{}>> with {} tags  ->  in {}]".format(systemTagWrite, caller_name, n, tagPaths ))
+        if debug:
+            print("Tags successfully written in bulk.")
+
+
+def wdPataias(base_path, base_query_wd_uns, wd_check=True):
+    """
+    Manages the watchdog functionality for the Pataias system.
+
+    - Checks and creates necessary watchdog tags if they don't exist.
+    - Compares current and previous WD (Watchdog) values.
+    - Updates WD_SQL_OK and WD_UNS tags based on whether the WD value has changed.
+
+    Args:
+        base_path (str): The base path where the WD tags are located.
+
+    Side Effects:
+        - Reads and writes to tags in the Ignition system.
+    """
+    global dataBase
+    # Define full tag paths using the base path | Variables from Ignition
+    wd_tag_path = "{}/WD".format(base_path)
+    wd_previous_path = "{}/WD_previous".format(base_path)
+    wd_sql_ok_path = "{}/WD_SQL_OK".format(base_path)
+    wd_uns_path = "{}/WD_UNS".format(base_path)
+    
+    columns, results = queryPataias(base_query_wd_uns)
+    publishPataias_ok, basePaths, tagConfigs, tag_paths, tag_values = publishPataias(columns, results, base_path, 0) # WD QUERY  | Variables from SQL
+    if publishPataias_ok:
+        bulkConfig(basePaths, tagConfigs, "o")
+        bulkWrite(tag_paths, tag_values, blocking=False) # system.tag.writeAsync(tag_paths, tag_values) #system.tag.writeBlocking(tag_paths, tag_values)
+    
+    # Check and create necessary tags
+    #create_tag_if_not_exists(wd_previous_path, "WD_previous", "Int4", "AtomicTag", 0)
+    tags_path = [wd_previous_path, wd_uns_path, wd_sql_ok_path]
+    tagsName = ["WD_previous", "WD_UNS", "WD_SQL_OK"]
+    values = [0, 0, False]
+    documentations = [
+        "WD previous value for control",
+        "SQL Incremental WD",
+        "SQL DataSource all Good"
+    ]
+    basePaths, tagConfigs, tags_path= systemTagExistsOrCreate_Bulk(base_path, tags_path, tagsName, values, documentations)
+    if tagConfigs:
+        bulkConfig(basePaths, tagConfigs, "o")
+    
+    
+    #sqlNow = system.db.runQuery("Select now()", dataBase)
+    try:
+        sqlNow = system.db.runQuery("SELECT NOW()", dataBase)
+        if sqlNow and len(sqlNow) > 0:
+            currentTime = sqlNow[0][0]
+        else:
+            currentTime = None
+    except Exception as e:
+        logger.error("Failed to get SQL time: {}".format(e))
+        currentTime = None
+    
+    # Read current and previous values
+    current_value = currentTime #sqlNow[0][0] # system.tag.readBlocking([wd_tag_path])[0].value
+    previous_value = system.tag.readBlocking([wd_previous_path])[0].value
+
+    # Check if WD has changed
+    if current_value != previous_value:
+        # Set WD_SQL_OK to True, indicating a change in WD
+        bulkWrite([wd_sql_ok_path], [True], blocking=True) #system.tag.writeBlocking([wd_sql_ok_path], [True])
+
+        # Increment WD_UNS by 1, but ensure it resets to 0 if it reaches 60
+        wd_uns_value_utf = system.tag.readBlocking([wd_uns_path])[0].value
+        wd_uns_value = int(wd_uns_value_utf)
+        if int(wd_uns_value) < 169: # 1week     25: #24h      288: #1dia a 5min
+            bulkWrite([wd_uns_path], [wd_uns_value + 1], blocking=True)  # system.tag.writeBlocking([wd_uns_path], [wd_uns_value + 1])
+        else:
+            bulkWrite([wd_uns_path], [1], blocking=True)  # system.tag.writeBlocking([wd_uns_path], [1]) #reset
+    else:
+        pass
+        #Disabled: To avoid alarms when the plant is shutdown. | We dont have a real WD in the SQL|SCADA
+        # The WD alarm is raised only if the SQL server is unavailable
+        ## Set WD_SQL_OK to False if no change detected
+        #bulkWrite([wd_sql_ok_path], [False], blocking=True)  # system.tag.writeBlocking([wd_sql_ok_path], [False])
+        ## Reset WD_UNS to 0
+        #bulkWrite([wd_uns_path], [0], blocking=True)  # system.tag.writeBlocking([wd_uns_path], [0])
+        #error_msg = "WD not updated. Check SQL connection. Timestamps: {}, {}".format(current_value, previous_value)
+        #send_alarms_teams_webhook(message = error_msg, clear = False, warn = True)
+                
+
+    # Update the previous value tag for the next comparison
+    bulkWrite([wd_previous_path], [current_value], blocking=True)  # system.tag.writeBlocking([wd_previous_path], [current_value])
+
+
+def infer_data_type(column):
+    """
+    Infers the data type for a tag based on the column name using predefined mappings.
+
+    Args:
+        column (str): The column name from the SQL query.
+
+    Returns:
+        str: The inferred data type (e.g., 'Int4', 'Float4', 'String', 'Boolean').
+    """
+    # Normalize the column name to lowercase for case-insensitive comparison
+    column_upper = column.upper()
+
+    # Handle specific hardcoded cases first
+    hardcoded_types = {
+        'id': 'Int8',
+        'wd': 'String'
+    }
+    if column_upper in hardcoded_types:
+        return hardcoded_types[column_upper]
+
+    # Define the mapping of substrings to data types
+    data_type_mapping = {
+        "COST_CENTER": "String",  # 'Int4'
+        "COUNTER": "Int8", #
+        "ID": "Int8",      
+        "MATERIAL_CODE": "String",
+        "MATERIAL_DESC": "String",
+        "MAXSQLTIMESTAMP": "String",
+        "MAXTIMESTAMP": "String",
+        "MOVEMENT_REASON": "String",
+        "MOVEMENT_TYPE": "String",
+        "OPERATION": "String",
+        "PLANT": "String",
+        "PRODUCTION_DATE": "String",
+        "PRODUCTION_HOUR": "String",
+        "QUANTITY": "Float4",  # Or Int4
+        "REFERENCE_DOC": "String",
+        "STORAGE_LOCATION": "String",
+        "TRANSACTION": "String",
+        "UNIT": "String",
+        "WD": "String",
+        "WD2": "Int8", #
+        "WD_PREVIOUS": "String", #
+        "WD_SQL_OK": "Boolean", #
+        "WD_UNS": "Int4" #
+    }    
+
+    # Check for substring matches in the mapping
+    for key, data_type in data_type_mapping.items():
+        if key in column_upper:
+            return data_type
+
+    # Default to 'String' if no match is found
+    return 'String'
+
+
+def clean_tag(tag, name=True):
+    """
+    Cleans a tag name or string value by replacing forbidden characters and normalizing Unicode characters.
+
+    - Replaces forbidden characters with underscores.
+    - Normalizes Unicode characters to their base characters.
+    - Removes extra spaces and underscores.
+
+    Args:
+        tag (str): The tag name or string value to clean.
+        name (bool): If True, treats the input as a tag name; otherwise, as a string value.
+
+    Returns:
+        str: The cleaned tag name or value.
+    """
+    
+    # Convert to Python string to expose any strange encoding symbols
+    if name:
+        tagName = str(tag)
+
+        # Common UTF-8 misinterpretations and their replacements, 
+        utf8_replacements = {
+            r'\xc2\xa0': ' ',  # Non-breaking space
+            r'\xc2\xba': 'o',  # Masculine ordinal indicator (º)
+            r'\xe2\x80\x93': '-',  # En dash (–)
+            r'\xe2\x80\x94': '-',  # Em dash (—)
+            r'\xe2\x80\x98': "'",  # Left single quotation mark (‘)
+            r'\xe2\x80\x99': "'",  # Right single quotation mark (’)
+            r'\xe2\x80\x9c': '"',  # Left double quotation mark (“)
+            r'\xe2\x80\x9d': '"',  # Right double quotation mark (”)
+            r'\xe2\x80\xa6': '...',  # Ellipsis (…)
+            r'\xc3\x80': 'A',  # À
+            r'\xc3\x81': 'A',  # Á
+            r'\xc3\x82': 'A',  # Â
+            r'\xc3\x83': 'A',  # Ã
+            r'\xc3\x87': 'C',  # Ç
+            r'\xc3\x89': 'E',  # É
+            r'\xc3\x8d': 'I',  # Í
+            r'\xc3\x93': 'O',  # Ó
+            r'\xc3\x9a': 'U',  # Ú
+            r'\xc3\xa0': 'a',  # à
+            r'\xc3\xa1': 'a',  # á
+            r'\xc3\xa2': 'a',  # â
+            r'\xc3\xa3': 'a',  # ã
+            r'\xc3\xa7': 'c',  # ç
+            r'\xc3\xa9': 'e',  # é
+            r'\xc3\xad': 'i',  # í
+            r'\xc3\xb3': 'o',  # ó
+            r'\xc3\xba': 'u',  # ú
+            r'\xc3\xaa': 'e',  # ê
+            r'\xc3\xb4': 'o',  # ô
+            r'\xc3\xb5': 'o',  # õ
+            r'\xc3\xbc': 'u',  # ü
+            r'\xc2\xaa': 'a',  # Feminine ordinal indicator (ª)
+            r'\xc2\xad': '-',  # Soft hyphen (­)
+            r'\xc3\x88': 'E',  # È
+            r'\xc3\x8b': 'E',  # Ë
+            r'\xc3\x91': 'N',  # Ñ
+            r'\xc3\x98': 'O',  # Ø
+            r'\xc3\x96': 'O',  # Ö
+            r'\xc3\xa8': 'e',  # è
+            r'\xc3\xab': 'e',  # ë
+            r'\xc3\xb9': 'u',  # ù
+            r'\xc3\xb1': 'n',  # ñ
+            r'\xc3\xbf': 'y',  # ÿ
+            r'\xe2\x82\xac': '€',  # Euro sign (€)
+            r'\xe2\x84\xa2': 'TM',  # Trademark (™)
+            r'\xe2\x80\x8b': '',  # Zero-width space
+        }
+    
+        # Apply the replacements for known UTF-8 misinterpretations
+        for utf8_seq, replacement in utf8_replacements.items():
+            tagName = re.sub(utf8_seq, replacement, tagName)
+    
+        # Define the allowed characters regex pattern
+        allowed_chars = re.compile(r'[^A-Za-z0-9_\-\(\)]')
+        # Normalize the string to NFD form to separate characters from their diacritical marks
+        tagName = unicodedata.normalize('NFD', tagName)
+        # Remove diacritical marks by filtering out characters with the 'Mn' (Mark, Nonspacing) category
+        tagName = ''.join(c for c in tagName if unicodedata.category(c) != 'Mn')
+        # Replace forbidden characters with an underscore
+        sanitized_tag = allowed_chars.sub('_', tagName.replace('ã', 'a').replace('í', 'i'))
+
+    else: #string for values (not names)
+        sanitized_tag = re.compile(r'[^A-Za-z0-9_():\- /.]').sub('_', 
+        ''.join(c for c in unicodedata.normalize('NFD', tag) 
+                if unicodedata.category(c) != 'Mn'))
+    # Replace multiple space, and underscores with a single space and strip trailing spaces/underscores
+    sanitized_tag = re.sub(r'\s+', ' ', sanitized_tag).strip()
+    sanitized_tag = re.sub(r'_+', '_', sanitized_tag).rstrip('_')
+
+    return sanitized_tag
+
+
+def jsonDic(tagValue, tagNames):
+    """
+    Processes a single row of SQL query results and prepares a dictionary for JSON conversion.
+
+    - Filters and cleans tag names and values.
+    - Removes unwanted keys and handles missing values.
+    - Adds fixed key-value pairs required for SAP transactions.
+
+    Args:
+        tagValue (list): The list of values from a SQL query row.
+        tagNames (list): The list of column names corresponding to tagValue.
+
+    Returns:
+        tuple:
+            - data (dict): The cleaned data dictionary.
+            - fixed_pairs (dict): Fixed key-value pairs to add to the data.
+            - MATERIAL_CODE (str): The cleaned material code extracted from the data.
+
+    Raises:
+        ValueError: If 'MATERIAL_CODE' is missing in the data.
+    """
+    global sqlColumnsNotToUse
+    global kg_list, to_list, un_list
+    global codeSCADA2SAP, codeSCADA2SAP_en
+    
+    tagNamesFilt, tagValueFilt = zip(*[filterSqlTag(tagName, 0 if value is None else value) for tagName, value in zip(tagNames, tagValue)])
+    # Creating a dictionary
+    data = dict(zip(tagNamesFilt, tagValueFilt))
+
+    # Accessing value by column name
+    #print('>>Tags:{} \n {}'.format(tagName, tagValue))
+    #print('>> DATA:\n {}'.format(data))#
+
+    # Clean the dictionary by stripping trailing spaces from string values
+    name = ""
+    dateIni = ""
+    dateFin = ""
+    man = False
+    
+    for key, value in data.items():
+        if isinstance(value, basestring):  # Check if the value is a string (compatible with Python 2.7)
+            key = key.upper()
+            data[key] = value.rstrip()  
+        if key == "MATERIAL_CODE":
+            MATERIAL_CODE = value
+
+    #MATERIAL_CODE = data.get("MATERIAL_CODE")
+    name = re.sub(r'\s+', ' ', MATERIAL_CODE).strip() #redundante..     
+    if name is None:
+        raise ValueError("Missing 'MATERIAL_CODE' value in tagNames ",tagNames)
+
+    key_to_check = "MATERIAL_CODE"  # Convert SACADA MP codes ("Mxxx") to SAP codes
+    scadacode = data[key_to_check]
+    if scadacode[0] == "M" and data.get("MOVEMENT_TYPE") == "201":
+        if codeSCADA2SAP_en:  # Hardcoded mapping
+            if debug:
+                print("MP SCADA->SAP [hardcoded]: {} -> {}".format(scadacode, codeSCADA2SAP[scadacode]))
+            name = data[key_to_check] = codeSCADA2SAP[scadacode]
+        else:  # Use SQL table mapping
+            code = data.get("CODE_SAP_OPERATOR")
+            if debug:
+                if code != 'Fornecedor Geral' or code is None:
+                    print("MP SCADA->SAP [SQL TBL]: {} -> {} vs {}".format(scadacode, data.get("CODE_SAP"), codeSCADA2SAP[scadacode]))
+                else:
+                    print("MP SCADA->SAP [SQL Operator Inputed]: {} -> {} vs {}".format(scadacode, code, codeSCADA2SAP[scadacode]))
+            try:
+                if code != 'Fornecedor Geral' or code is None:
+                    name = data[key_to_check] = data.get("CODE_SAP")  # Fallback to scadacode if CODE_SAP is missing
+                else:
+                    name = data[key_to_check] = code  # Fallback to scadacode if CODE_SAP is missing
+            except Exception as e:
+                print("MP SCADA->SAP [SQL TBL]: ERROR - keeping SCADA value. Error: {}".format(str(e)))
+                name = scadacode
+
+    MATERIAL_CODE = name
+    
+    if "QUANTITY" in data:
+        convertKg2To = convertTo2Kg = False
+        quantity_value = data["QUANTITY"]
+        try:
+            #GRANEL
+            if MATERIAL_CODE in to_list and data["UNIT"] == "KG" : #' Kg -> To (SAP)
+                convertKg2To = True
+                data["UNIT"] = "TO"
+            elif MATERIAL_CODE in kg_list and data["UNIT"] == "TO" : #' To -> Kg (SAP)  | THIS MUST BE PROBLEMATIC----
+                convertTo2Kg = True
+                data["UNIT"] = "KG"
+                if debug:
+                    print("!!!! Material|Produto convertido TO >> KG (no conversion applied) {}|{}:{}".format(MATERIAL_CODE, scadacode, data["QUANTITY"]))
+               
+            # Attempt to convert to float
+            quantity_float = float(quantity_value)
+            # Check if it's effectively an integer
+            if quantity_float.is_integer():
+                # It's an integer
+                data["QUANTITY"] = int(quantity_float) if not convertKg2To else round(quantity_float / 1000, 2)             
+            else:
+                # It's a float with two decimal places
+                data["QUANTITY"] = round(quantity_float, 2) if not convertKg2To else round(quantity_float / 1000, 2)                
+            if debug and convertKg2To:
+                print(">> Material|Produto convertido KG > TO | CODE: {} {} | Qt: {} -> {} TO ".format(MATERIAL_CODE, scadacode, quantity_float, data["QUANTITY"] ))  #VALIDO p/ PATAIS?
+            #if True and MATERIAL_CODE == "84094":
+            #       print(">>>>",MATERIAL_CODE , data["QUANTITY"], data["UNIT"],data)                
+        
+        except (ValueError, TypeError):
+            # Leave it as is if it cannot be converted
+            print('Quantity convertion ERROR',quantity_value)
+    
+    if "PRODUCTION_DATETIME" in data:
+        dateIni = data["PRODUCTION_DATETIME"]
+        del data["PRODUCTION_DATETIME"]
+
+    def parse_datetime(date_str):
+        """
+        Try to parse `date_str` using each format in `formats`.
+        Return the datetime object for the first format that works.
+        Raise ValueError if none of the formats match.
+        """
+        formats = [
+            "%a %b %d %H:%M:%S %Z %Y",  # Example: Wed Feb 05 14:30:00 GMT 2025
+            "%Y-%m-%d %H:%M:%S",         # Example: 2025-02-05 14:30:00
+            "%d-%m-%Y %H:%M:%S"          # Example: 05-02-2025 14:30:00
+        ]
+        
+        for fmt in formats:
+            try:
+                parsed_date = datetime.strptime(date_str, fmt)
+                #print("------------", parsed_date, date_str, fmt)
+                return parsed_date
+            except ValueError:
+                continue
+        raise ValueError("Date '{}' does not match any expected format: {}".format(date_str, formats))
+
+    # Assume dateIni, dateFin, and data are defined elsewhere.
+    if dateIni:
+        dt_object = parse_datetime(dateIni)
+        # Save production date and time in desired string formats.
+        data["PRODUCTION_DATE"] = dt_object.strftime("%Y-%m-%d")
+        data["PRODUCTION_HOUR"] = dt_object.strftime("%H:%M:%S")
+        
+        # If dateFin is not provided, assume it is the same as dateIni.
+        if not dateFin:
+            dateFin = dateIni
+    else:
+        # If dateIni is missing, build it from the production date and hour.
+        dateIni = data['PRODUCTION_DATE'] + " " + data['PRODUCTION_HOUR']
+        dateFin = dateIni
+    
+    if debug:
+        print("pre")
+        print("- DateIni:", dateIni)
+        print("- DateFin:", dateFin)
+    dtObjectIni = parse_datetime(dateIni)
+    dtObjectFin = parse_datetime(dateFin)
+    dateIni = dtObjectIni.strftime("%Y-%m-%d %H:%M:%S")
+    #dateIni = dtObjectIni.strftime("%Y-%m-%d %H:%M:%S")
+    dateFin = dtObjectFin.strftime("%Y-%m-%d %H:%M:%S")
+    #dateFin = dtObjectFin.strftime("%Y-%m-%d %H:%M:%S")
+    if debug:
+        print("Pos")
+        print("- DateIni:", dateIni)
+        print("- DateFin:", dateFin)
+
+    #debug
+    # Print any void values for debug
+    if debug:
+        for key, value in data.items():
+            if not value or value == "" or value ==  "---":
+                try:
+                    if any(x in [scadacode] for x in [""]): # NOT USED - PATAIAS
+                        print(">>> Incomplete DATA |  ", scadacode, key, value)
+                    else:
+                        print(">>>> Abnormal Incomplete DATA | Trying to complete... ", scadacode, key, value, dateIni)
+                except:
+                    print(">>>> Incomplete DATA  | Trying to complete...  ", key, value)
+    
+    # Remove keys that are in DONOTHAVE or have a value of None
+    data = {key: value for key, value in data.items() if key not in sqlColumnsNotToUse and value is not None}
+
+    key_to_check = "MOVEMENT_REASON" #  
+    if key_to_check in data: # NULLS
+        if data.get(key_to_check) == "":
+            data[key_to_check] = "999"  # !
+    
+    key_to_check = "COST_CENTER" # 
+    #print(data.get(key_to_check)) ###
+    if key_to_check in data:  # NULLS
+        if data.get(key_to_check) in ("", "COST_CENTER", "0"):
+            if "AP500" in scadacode:
+                data[key_to_check] = 901121
+                if debug:
+                    print("AP500 CC corrected")
+            elif "AP505" in scadacode:
+                data[key_to_check] = 901122
+                if debug:
+                    print("AP505 CC corrected")
+            elif "AP749" in scadacode:
+                data[key_to_check] = 901150
+                if debug:
+                    print("AP749 CC corrected")
+            else:
+                data[key_to_check] = 0
+    
+    key_to_check = "PLANT" # 
+    if key_to_check in data: # NULLS
+        if data.get(key_to_check) == "":
+            data[key_to_check] = "9630"  # !
+        if "MAN" in data.get(key_to_check) or "---" in data.get(key_to_check):
+            data[key_to_check] = "9630"  # !
+            man = True
+            
+    key_to_check = "STORAGE_LOCATION" # 
+    if key_to_check in data: # NULLS
+        if data.get(key_to_check) == "" and data.get("MOVEMENT_TYPE") == '202':
+            data[key_to_check] = "963J"  #                          # <--ATUALIZAR PARA PATAIAS OU APAGAR
+        if data.get(key_to_check) == "" and data.get("MOVEMENT_TYPE") == '201':
+            data[key_to_check] = "963H"  # !!!!!!
+        if ("MAN" in data.get(key_to_check) or "---" in data.get(key_to_check))  and data.get("MOVEMENT_TYPE") == '201':
+            data[key_to_check] = "963H"  # !!!!!
+            man = True
+
+    # List of keys to edit values if incomplete
+    # Define UNIT based on lists and conditions
+    key_to_check = 'UNIT'
+    if 'UNIT' in data:
+        pass   # QUERIES DO HAVE UNIT | NOT USED
+    else:
+        if MATERIAL_CODE in to_list:
+            data['UNIT'] = 'TO'  # Tonnes
+        elif MATERIAL_CODE in kg_list:
+            data['UNIT'] = 'KG'  # Kilograms
+        elif MATERIAL_CODE in un_list and data.get("MOVEMENT_TYPE") == "202":
+            data['UNIT'] = 'UN'  # Unit of bags
+        else:
+            print("Code WITH NO UNIT listed:", MATERIAL_CODE, scadacode)
+    
+
+    # Add 4 fixed key-value pairs to the dictionary
+    fixed_pairs = {
+        'TRANSACTION': 'MIGO',
+        'OPERATION': 'Saida Mercadorias',
+        'REFERENCE_DOC': 'Outros/as',
+        'MOVEMENT_TYPE': data.get('MOVEMENT_TYPE')
+    }   
+
+    return data, fixed_pairs, MATERIAL_CODE, dateIni, dateFin, man
+
+
+def norm(tagValues, tagNames, base_path):
+#norm_ok, basePaths, tagConfigs, tag_paths, tag_values = norm(tagValues=results, tagNames=ucolumns,  base_path=normPath)
+    """
+    Normalizes SQL query outputs and publishes them to the specified Ignition tag path.
+
+    - Iterates over query results and cleans data.
+    - Publishes Normalised data using `publishPataias()`.
+
+    Args:
+        tagValues (list): The list of rows from the SQL query.
+        tagNames (list): The list of column names.
+        base_path (str): The base path where Normalised data should be published.
+    """
+    
+    basePathsALL =  []
+    tagConfigsALL = []
+    tag_pathsALL =  []
+    tag_valuesALL = []
+    
+    if debug:
+        print("Normalizing: ",base_path)
+
+    for tagValue in tagValues:
+    
+        data, fixed_pairs, MATERIAL_CODE, d1, d2, man  = jsonDic(tagValue, tagNames)
+        tag_path_codigo = "{}/{}".format(base_path, MATERIAL_CODE)
+        
+        if debug:
+            print('-------------- Publish NORM-------------------')
+            print('Values -> Publish',type(tagValues),len(tagValue), tagValue)
+            print('Names  -> Publish',type(tagNames),len(tagNames), tagNames)
+        publishPataias_ok, basePaths, tagConfigs, tag_paths, tag_values = publishPataias(tagNames, tagValue, tag_path_codigo, MATERIAL_CODE)
+        
+        if publishPataias_ok: # append do 
+            basePathsALL =  basePathsALL+basePaths
+            tagConfigsALL = tagConfigsALL+tagConfigs
+            tag_pathsALL =  tag_pathsALL+tag_paths
+            tag_valuesALL = tag_valuesALL+tag_values
+        
+        if debug:
+            print("Norm --> {} \n  {} \n  {} \n ".format(tag_path_codigo, basePathsALL, tag_pathsALL))
+        
+    """if tagConfigsALL:
+        bulkConfig(basePaths, tagConfigs, "o")
+    if tag_valuesALL:
+        bulkWrite(tag_paths, tag_values, blocking=False) # system.tag.writeAsync(tag_paths, tag_values) #system.tag.writeBlocking(tag_paths, tag_values)
+    """
+    return True, basePathsALL, tagConfigsALL, tag_pathsALL, tag_valuesALL
+    
+
+def convertDatetime(input_datetime, printType=False):
+    """
+    Converts input datetime (java.util.Date, Python datetime, or string) to:
+    1. java.util.Date
+    2. Python datetime
+    3. String in "YYYY-mm-dd HH:mm:ss" format.
+
+    Handles string inputs in either "YYYY-mm-dd HH:mm:ss" or "dd-mm-YYYY HH:mm:ss" format.
+
+    Logs the detected type of the input datetime if verbose is True.
+
+    Note:
+        - Timezone considerations: This function uses naive datetime objects
+          in local time. Ensure that your input times are in local time to avoid
+          discrepancies.
+
+    Returns:
+        dict: A dictionary with the following keys:
+            - "java_date": The datetime as a java.util.Date object.
+            - "python_date": The datetime as a Python datetime object.
+            - "string_date": The datetime as a string in "YYYY-mm-dd HH:mm:ss" format.
+    """
+
+    # Initialize variables
+    java_date = None
+    python_date = None
+    string_date = None
+    def datetime_to_millis(dt):
+        """Converts a Python datetime object to milliseconds since epoch."""
+        return (dt - EPOCH).total_seconds() * 1000.0
+    
+    def millis_to_datetime(millis):
+        """Converts milliseconds since epoch to a Python datetime object."""
+        return datetime.fromtimestamp(millis / 1000.0)
+
+    # Detect type and log it
+    if isinstance(input_datetime, Date):  # Java Date
+        if printType or debug:
+            print("Detected type: java.util.Date", input_datetime)
+        java_date = input_datetime
+        millis = java_date.getTime()
+        python_date = millis_to_datetime(millis)
+        string_date = python_date.strftime("%Y-%m-%d %H:%M:%S")
+
+    elif isinstance(input_datetime, datetime):  # Python datetime
+        if printType or debug:
+            print("Detected type: Python datetime", input_datetime)
+        python_date = input_datetime
+        millis = datetime_to_millis(python_date)
+        java_date = system.date.fromMillis(long(millis))
+        string_date = python_date.strftime("%Y-%m-%d %H:%M:%S")
+
+    elif isinstance(input_datetime, basestring):  # String input (str or unicode in Python 2)
+        if printType or debug:
+            print("Detected type: String", input_datetime)
+        # Attempt to parse the string in multiple formats
+        formats = ["%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M:%S"]
+        for fmt in formats:
+            try:
+                python_date = datetime.strptime(input_datetime, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            raise ValueError(
+                "String format must be either 'YYYY-mm-dd HH:mm:ss' or 'dd-mm-YYYY HH:mm:ss'"
+            )
+
+        # Convert to java.util.Date
+        millis = datetime_to_millis(python_date)
+        java_date = system.date.fromMillis(long(millis))
+        string_date = python_date.strftime("%Y-%m-%d %H:%M:%S")
+
+    else:
+        raise TypeError(
+            "Unsupported datetime type. Provide java.util.Date, Python datetime, or string."
+        )
+
+    # Print results for debugging if verbose
+    if debug:
+        print("Java Date:", java_date)
+        print("Python DateTime:", python_date)
+        print("String:", string_date)
+
+    # Return all three formats
+    return {
+        "java_date": java_date,
+        "python_date": python_date,
+        "string_date": string_date
+    }
+
+
+def processMigoTimestamp(movement_type, data, timestampControl, cirruslink_json_path, latestTimestamp_tagPath, dateFin = "", buggy_check=False):
+    """
+    Processes and validates MIGO timestamps, ensuring proper comparison with the currently stored timestamp 
+    and updating it if the new timestamp is more recent.
+
+    This function performs the following operations:
+      - Constructs a new timestamp string from data fields ("PRODUCTION_DATE" and "PRODUCTION_HOUR") or uses 
+        the optional 'dateFin' if provided.
+      - Converts the timestamp string into a datetime object.
+      - Optionally checks for “buggy” future timestamps when 'buggy_check' is enabled.
+      - Ensures that the tag for storing the latest timestamp exists by using systemTagExistsOrCreate_Bulk 
+        (and creates it in bulk via bulkConfig if missing).
+      - Reads the current timestamp value from the tag (using system.tag.readBlocking) and converts it.
+      - Compares the new timestamp with the stored timestamp:
+          • If the stored (latest) timestamp is greater than or equal to the new one, the function returns True,
+            indicating that no update is needed.
+          • Otherwise, if the new timestamp is more recent (and not flagged as buggy), it updates the tag by writing 
+            the new timestamp (using bulkWrite) and also updates a corresponding "maxTimestamp" tag if required.
+      - If any error (ValueError or general Exception) occurs during processing, it logs the error and returns True.
+
+    Parameters:
+        movement_type (str or int): The expected movement type (e.g. '201' or '202') to process. The function 
+                                    only proceeds if the "MOVEMENT_TYPE" in the data matches this value.
+        data (dict): A dictionary containing the data row from the SQL query. It must include keys such as 
+                     "PRODUCTION_DATE", "PRODUCTION_HOUR", "MOVEMENT_TYPE", and "MATERIAL_CODE".
+        timestampControl (bool): Flag indicating whether timestamp control is enabled.
+        cirruslink_json_path (str): The base path used for JSON related tags in the Ignition system.
+        latestTimestamp_tagPath (str): The full Ignition tag path where the latest timestamp for the material is stored.
+        dateFin (str, optional): An optional final timestamp string (format '%Y-%m-%d %H:%M:%S). If provided, 
+                                 it will be used instead of concatenating "PRODUCTION_DATE" and "PRODUCTION_HOUR".
+        buggy_check (bool, optional): If True, the function will check for and flag timestamps that are in the future 
+                                      relative to the current system time.
+
+    Returns:
+        bool: Returns True in any of the following cases:
+                - The current (stored) timestamp is greater than or equal to the new timestamp, indicating that 
+                  no update is necessary.
+                - An error occurs during timestamp parsing or processing.
+             Returns False if the new timestamp was successfully written (i.e. the tag was updated).
+
+    Side Effects:
+        - May create or update Ignition tags using systemTagExistsOrCreate_Bulk and bulkConfig.
+        - Writes new timestamp values to tags using bulkWrite (which calls system.tag.writeBlocking).
+        - Logs debug and error information via the logger and prints debug output if the global debug flag is enabled.
+    """
+    #Processes and validates MIGO timestamps, ensuring proper comparisons and updates.
+    if debug:
+        print('Data Process MIGO:', data)
+
+    if timestampControl and "MOVEMENT_TYPE" in data and str(data['MOVEMENT_TYPE']) == str(movement_type):
+        try:
+            if dateFin:
+                newTimestampStr = dateFin
+            else:
+                newTimestampStr = '{} {}'.format(data["PRODUCTION_DATE"], data["PRODUCTION_HOUR"])
+                
+            # Convert newTimestampStr to datetime object
+            #newTimestamp = datetime.strptime(newTimestampStr, '%d-%m-%Y %H:%M:%S')
+            newTimestamp = datetime.strptime(newTimestampStr, '%Y-%m-%d %H:%M:%S')
+            if debug:
+                print("MIGO NEW:", convertDatetime(newTimestamp)) #string
+            
+            # Check for future timestamps if buggy_check is enabled
+            buggy = False
+            if buggy_check:
+                if debug:
+                    print("MIGO BUGGY ON")
+                # Get the current date and time
+                currentDate = datetime.now()
+                if debug:
+                    print("MIGO NOW:", convertDatetime(currentDate))
+                if newTimestamp > currentDate:
+                    print("\nThe timestamp is in the future: {} > {}".format(newTimestamp, currentDate))
+                    print('Buggy DATA values:', data)
+                    logger.debug("Buggy Timestamp: Timestamp is in the future, DATA:\n {}".format(data))
+                    buggy = True
+
+            # Ensure the system tag exists (Ignition SCADA specific)
+            nameTimestamp = latestTimestamp_tagPath.rsplit('/',1)[-1]
+            basePaths, tagConfigs, tags_path = systemTagExistsOrCreate_Bulk(
+                cirruslink_json_path, 
+                latestTimestamp_tagPath, 
+                nameTimestamp,
+                '2000-01-01 00:00:00', 
+                ""
+            )
+            exist = False if tagConfigs else True
+            if not exist:
+                bulkConfig(basePaths, tagConfigs, "o")
+            if debug:
+                print("MIGO - CHECK TAG: exists?:", exist, latestTimestamp_tagPath, cirruslink_json_path,movement_type)
+
+            #Read and parse the latest timestamp from the tag
+            latestTimestampStr = system.tag.readBlocking([latestTimestamp_tagPath])[0].value
+            if debug:
+                print("MIGO latestTimestampStr ", latestTimestampStr) 
+            latestTimestampPy = convertDatetime(latestTimestampStr)['python_date']
+            if debug:
+                print("MIGO latestTimestampPy:", latestTimestampPy)
+            latestTimestamp = datetime.strptime(str(latestTimestampPy), '%Y-%m-%d %H:%M:%S')
+            if debug:
+                print("MIGO latestTimestamp:", convertDatetime(latestTimestamp))            ########## DATETIME debug  | Py vs Java vs Str
+            
+            # Compare timestamps
+            if latestTimestamp >= newTimestamp:
+                if debug:
+                    if debug:
+                        print('>>MIGO{} Skipped by timestamp: {} Previous:{} >= SQL:{}'.format(
+                        movement_type,
+                        data["MATERIAL_CODE"], 
+                        latestTimestampStr, 
+                        newTimestampStr
+                        ))
+                return True
+            else:
+                if debug:
+                    print('>>MIGO{} UPDATED: {} Previous:{} < SQL:{}'.format(
+                        movement_type,
+                        data["MATERIAL_CODE"],  
+                        latestTimestampStr, 
+                        newTimestampStr
+                    ))
+                if not buggy:
+                     #SAVE NEW TIMESTAMP FOR that material
+                    bulkWrite([latestTimestamp_tagPath], [newTimestampStr], blocking=True)  # system.tag.writeBlocking([latestTimestamp_tagPath], [newTimestampStr])
+                    
+                    #MAXTIMESTAMP ###################################################
+                    try:
+                        pathAux = latestTimestamp_tagPath.rsplit('/',1)[0]
+                        maxTimestamptagPath = pathAux +'/maxTimestamp'
+                        basePaths, tagConfigs, tags_path = systemTagExistsOrCreate_Bulk(pathAux, maxTimestamptagPath, "maxTimestamp", "2000-01-01 00:00:00", "Latest date from SQL")
+                        if tagConfigs:
+                            bulkConfig(basePaths, tagConfigs, "o")
+                        maxTimestamp = system.tag.readBlocking([maxTimestamptagPath])[0].value
+                        if debug:
+                            print("newTimestampStr vs maxTimestamp",newTimestampStr,maxTimestamp)
+                        if convertDatetime(newTimestampStr)['python_date'] > convertDatetime(maxTimestamp)['python_date']:
+                            maxTimestamp=newTimestampStr
+                            bulkWrite([maxTimestamptagPath], [maxTimestamp], blocking=True)  # system.tag.writeBlocking([maxTimestamptagPath], [maxTimestamp])  
+                            if debug:
+                                print("maxTimestamp updated: {}, Material: {}. TP: {} {}".format(maxTimestamp, data["MATERIAL_CODE"], latestTimestampStr, newTimestampStr))
+                    except Exception as e:
+                        maxTimestamp=newTimestampStr
+                        logger.error("maxTimestamp error: {}".format(str(e)))
+                        print("maxTimestamp error")
+                    
+        except ValueError as ve:
+            print("Error parsing timestamp: ", str(ve), "PRODUCTION_DATETIME:",
+            data.get("PRODUCTION_DATETIME"), "PRODUCTION_DATE:",
+            data.get("PRODUCTION_DATE"), "PRODUCTION_HOUR:", data.get("PRODUCTION_HOUR"))
+            logger.error("ValueError processing timestamp: {}".format(str(ve)))
+            return True
+
+        except Exception as e:
+            print("General error processing timestamp: ", str(e), data)
+            logger.error("General error processing timestamp: {}".format(str(e)))
+            return True
+    return False
+
+
+def getLatestSQLtime(timestamp, timestamp_Path):
+    """
+    Retrieve and update the latest SQL timestamp based on a given timestamp and a tag path.
+
+    This function compares the provided timestamp with the current maximum SQL timestamp 
+    stored in an Ignition tag. If the provided timestamp is more recent, it updates the 
+    maximum SQL timestamp tag accordingly. If not, it returns the current maximum SQL timestamp 
+    unchanged.
+
+    Args:
+        timestamp (str): A timestamp string expected in a format that `convertDatetime()` 
+                         can parse into a Python `datetime` object.
+        timestamp_Path (str): The base path for the Ignition tag where the maximum SQL 
+                              timestamp is stored or will be created.
+
+    Returns:
+        datetime.datetime: The Python `datetime` object representing the latest updated SQL timestamp.
+
+    Side Effects:
+        - May create a new tag if it doesn't exist.
+        - May write a new value to the 'maxSQLTimestamp' tag if the provided timestamp is more recent.
+        - Logs updates and errors depending on the `debug` and `verbose` flags.
+
+    Raises:
+        Any exceptions encountered during tag operations or parsing will be handled 
+        internally if the try-except block is restored.
+    """
+    # MAXSQLTIMESTAMP ###################################################
+    try:
+        pathAux = timestamp_Path  # .rsplit('/', 1)[0]
+        maxSQLTimestamptagPath = pathAux + '/maxSQLTimestamp'
+        basePaths, tagConfigs, tags_path = systemTagExistsOrCreate_Bulk(pathAux, maxSQLTimestamptagPath, "maxSQLTimestamp", "2000-01-01 00:00:00", "Latest date from SQL")
+        if tagConfigs:
+            bulkConfig(basePaths, tagConfigs, "o")   
+        maxSQLTimestamp = system.tag.readBlocking([maxSQLTimestamptagPath])[0].value
+        if debug:
+            print("timestamp > maxSQLTimestamp", timestamp, maxSQLTimestamp)
+
+        #t1 = convertDatetime(timestamp)['python_date'].strftime("%d-%m-%Y %H:%M:%S")
+        #t2 = convertDatetime(maxSQLTimestamp)['python_date'].strftime("%d-%m-%Y %H:%M:%S")
+        t1 = timestamp
+        t2 = datetime.strptime(maxSQLTimestamp, '%Y-%m-%d %H:%M:%S')
+        
+        if t1 > t2:
+            maxSQLTimestamp = t1.strftime('%Y-%m-%d %H:%M:%S')
+            bulkWrite([maxSQLTimestamptagPath], [maxSQLTimestamp], blocking=True) # system.tag.writeBlocking([maxSQLTimestamptagPath], [maxSQLTimestamp])
+            if debug:
+                print("maxSQLTimestamp updated: {}".format(maxSQLTimestamp))
+        else:
+            if debug:
+                print("maxSQLTimestamp NOT updated: {}".format(maxSQLTimestamp))
+    except Exception as e:
+        maxSQLTimestamp = timestamp
+        logger.error("maxSQLTimestamp error".format(str(e)))
+        print("maxSQLTimestamp error {} - {}".format(str(e),timestamp))
+
+    return convertDatetime(maxSQLTimestamp)['python_date']
+
+
+def convert_to_json(tagValues, tagNames, base_json_path):
+    """
+    Converts SQL query results to JSON format and writes them to Ignition tags or files.
+
+    - Processes each row to create a JSON payload.
+    - Writes the payload to specific Ignition tags and optionally to files.
+
+    Args:
+        tagValues (list): The list of rows from the SQL query.
+        tagNames (list): The list of column names.
+        base_json_path (str): The base path where JSON data should be written.
+
+    Returns:
+        str: The last JSON payload created.
+
+    Side Effects:
+        - Writes JSON payloads to Ignition tags.
+        - Optionally writes JSON files if `json2file` is True.
+    """
+    global jsonTransactionsCounter
+    global lastProdCode, lastBatchCode
+    global materialExcluded
+
+    #debug = tagValues[-1]["STORAGE_LOCATION"] == "963J"  and not tagValues[-1]["UNIT"] == "UN" # PG
+    if debug:
+        logger.debug('<<>> INSIDE JSON')
+    buggy = False
+    json_payload = {}
+    path_segments = base_json_path.split("/")
+    parent_path = "/".join(path_segments[:-1])
+    cirruslink_json_path = parent_path + '/MIGO'
+    cirruslink_json_n = cirruslink_json_path + '/counter'
+    cirruslink_json_tagPath = cirruslink_json_path + '/jsonIgnition'
+    cirruslink_json_migoLatestTimestamp_Path = cirruslink_json_path + '/timestamp'
+    skipBatch = False
+    
+    try:
+        timestamp = convertDatetime(tagValues[-1]["PRODUCTION_DATETIME"])["python_date"]
+    except:
+        logger.warn("ERRO timestamp") 
+    
+    try:
+	    latestSQLtime = getLatestSQLtime(timestamp, cirruslink_json_migoLatestTimestamp_Path)
+	    # timestamp = convertDatetime(tagValues[-1]["PRODUCTION_DATETIME"])["python_date"]
+	    lastTimestamp = timestamp  # datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+	    currentDate = datetime.now()
+	    # Define the time values
+	    time1 = currentDate  # datetime.strptime(currentDate, "%Y-%m-%d %H:%M:%S.%f")
+	    time2 = lastTimestamp  # datetime.strptime(lastTimestamp, "%Y-%m-%d %H:%M:%S")
+	    # Calculate the elapsed time
+	    elapsedTime = time1 - time2
+	
+	    name = tagValues[-1]["MATERIAL_CODE"]
+	    mov202 = name[0] == "A" and tagValues[-1]["STORAGE_LOCATION"] == "963J"  #202 Prod 
+	    prod = tagValues[-1]["PRODUTO"].strip() if not mov202 else name
+	    batch = tagValues[-1]["BATCH"].strip() if not tagValues[-1]["UNIT"] == "UN" else name
+	
+	    if debug:
+	        logger.debug('<<>> {}'.format(name))
+	
+	    codesFromAtualBatch = (
+	        {
+	            row["MATERIAL_CODE"].strip()
+	            for row in tagValues[-20:]
+	            if row["PRODUTO"].strip() == prod
+	        }
+	        if not mov202
+	        else name
+	    )
+	    codesFromAtualBatchStr = ", ".join(codesFromAtualBatch) if not mov202 else name
+    except Exception as e:
+        logger.error('Error In convert to json - Timestamps and codes {}'.format(str(e)))
+ 
+    #PROD SACOS
+    # Get the index for "UNIT"
+    unit_index = tagNames.index("UNIT") #8
+    # Check if the value in the "UNIT" column is "UN"
+    if tagValues[-1][unit_index] == "UN":     #if tagValues[-1]["UNIT"] == "UN":      #if tagValues[-1]["MATERIAL_CODE"][:2] in ("AL", "AM", "AN", "AP", "AR", "AS", "AZ"): # review
+        batchTimeout = batchTimeoutShort
+    else:
+        batchTimeout = batchTimeoutLong
+    skipBatch1 = elapsedTime < timedelta(minutes=batchTimeout)
+    
+    if debug:
+        if not skipBatch1:
+            skipBatch1Txt = "Batch Antigo (timeout) -> MQTT    "
+        else:
+            skipBatch1Txt = "Batch Recente, skipping1 "
+        logger.debug(" >> [{}]  ||{}{}|  {}  <Elapsed Time: {} de {}min>".format(
+            codesFromAtualBatchStr, #tagValues[-1]["MATERIAL_CODE"].strip(),
+            skipBatch1Txt,
+            skipBatch1,
+            time2,
+            elapsedTime,
+            batchTimeout
+            ))
+
+    if system.tag.exists(cirruslink_json_migoLatestTimestamp_Path + '/maxTimestamp'):
+        maxTimestampTag = system.tag.readBlocking([cirruslink_json_migoLatestTimestamp_Path + '/maxTimestamp'])[0].value
+        maxTimestamp = convertDatetime(maxTimestampTag)["python_date"]
+        elapsedTimeLastSqlValue = lastTimestamp - maxTimestamp  # Enviado para Payload
+        elapsedTimeMaterialLastSqlValue = latestSQLtime - lastTimestamp  # Ultimo registo no sql
+
+        if lastTimestamp >= latestSQLtime:  # Comparar o ultimo timestamp detetado do sql com o timestamp deste material.
+            if debug:
+                logger.debug("  >>>>>   FRESH time! Recent data to skip. skipBatch2")  # , elapsedTime, maxTimestamp
+            skipBatch2 = True
+        else:
+            skipBatch2 = False
+
+        skipBatch3 = prod == lastProdCode and batch == lastBatchCode
+        #logger.debug("----{}{}{}{}{}".format(skipBatch3, prod, lastProdCode, batch,lastBatchCode))
+                
+        if debug:
+            logger.debug("  >>>>>   Material(s) in Atual Batch! skipBatch3 : [{} |{} {}]".format(codesFromAtualBatchStr, lastProdCode, lastBatchCode)) if skipBatch3 else "  >>>>>   Material NOT in Atual Batch! skip3 not triggered"
+        
+        try:
+            skipCode = name in materialExcluded #if any(name in value for value in materialExcluded): #E.g. Residues, TESTE  | if name in materialExcluded:
+            if skipCode  and debug:
+                logger.debug("Material {} do not exist in SAP - Payload not to be published [skipCode]".format(name))
+        except Exception as e:
+                logger.debug('ERR Skkiping non-SAP code|name:  {}'.format(str(e)))      
+        if skipCode:
+            return ""
+        
+        # New condition: force skipBatch=False if >12h passed AND the day changed
+        # 2028.08.29 Problema da ultima producao a granel do dia...
+        if elapsedTime > timedelta(hours=6) and lastTimestamp.date() != currentDate.date():
+            skipBatch4 = False
+            if debug:
+                logger.debug(">> Forcing skipBatch=False due to elapsedTime>12h and day change")
+        else:
+            skipBatch4 = True
+        
+        skipBatch = (skipBatch1 or skipBatch2) and skipBatch3 and skipBatch4
+        
+        if debug:
+	        logger.debug(
+	            "Skip Info >>  {}: {}  <== ({} | {}) & ({}) & ({})".format(
+	                prod, bool(skipBatch), skipBatch1, skipBatch2, skipBatch3, skipBatch4
+	            )
+	        )
+        
+        #print("================\r\n================\r\n================\r\n================\r\n")
+        if verbose and skipBatch:
+            logger.debug("\r\n*******************      IN PRODUCTION      *****************")
+        if verbose:
+            if skipBatch :
+                logger.debug("SKIPPING 1st Rows from query {}|{}   <(deltaT:{} OR deltaSqlT:{}) & batchDif:{}>".format(codesFromAtualBatchStr, prod, skipBatch1, skipBatch2, skipBatch3))
+            else:
+                if debug:
+                    logger.debug("NOT SKIPPING rows from query <(deltaT:{} OR deltaSqlT:{}) & batchDif:{}>".format(skipBatch1, skipBatch2, skipBatch3))
+        if verbose:
+            logger.debug(" <> Material: <{}> da Produção: <{}> || Batch em Producao: [{} | {}]".format(codesFromAtualBatchStr, prod, lastProdCode, lastBatchCode))
+        if verbose and skipBatch:
+            logger.debug("  > ElapsedTime:    {}      | ElapsedTimeLastMIGOpayload:{}  | elapsedTimeMaterialLastSqlValue:{} \r\n  > CurrentDate:    {} | MaterialLastTimestamp:{}\r\n  > SQLmaxTimestamp:{} | MaterialLastTimestamp:{} \r\n  > latestSQLtime:  {} | MaterialLastTimestamp:{} "
+                           .format(elapsedTime, elapsedTimeLastSqlValue, elapsedTimeMaterialLastSqlValue,
+                          currentDate.strftime("%Y-%m-%d %H:%M:%S"), lastTimestamp, maxTimestamp, lastTimestamp,
+                          latestSQLtime, lastTimestamp))
+        if verbose and skipBatch:
+            logger.debug("  > SQL Batch Inicio | Atual: {}\n".format(timestamp))
+
+    ######################################################################################
+    # NAO MANDA PARA JSON A PRODUCAO ATUAL = último valor da query.
+    # Até próxima producao nao escrevemos a ultima.
+    if debug:
+        logger.debug("> {}/{} {}/{} ".format(prod, lastProdCode, batch, lastBatchCode))
+        logger.debug("> Skipped {}|{} - {} rows".format(codesFromAtualBatchStr, prod, len(codesFromAtualBatch)) if skipBatch else "No rows Skipped")
+    for tagValue in (tagValues[:-len(codesFromAtualBatch)] if skipBatch else tagValues):
+
+        data, fixed_pairs, MATERIAL_CODE, dateIni, dateFin, man = jsonDic(tagValue, tagNames)
+        if debug:
+            logger.debug(":::::{}-{}::::".format(MATERIAL_CODE, dateIni))
+        
+        # Update the dictionary with the fixed pairs
+        data.update(fixed_pairs)
+
+        if data['QUANTITY'] <= 0.0 and str(data['MOVEMENT_TYPE']) != '202': # 201 >0 |  202 - Pode ter Perdas (sacos) | NAO TEM EM PATAIAS
+            logger.debug('Material with an incorrect Quantity. Skipping ', data["MATERIAL_CODE"], data["QUANTITY"], dateIni)
+            continue
+
+        if str(data['MOVEMENT_TYPE']) == '202':
+            #diferenciar Granel de Saco
+            tipo = "PS" if data["UNIT"] == "UN" else "PG"  #PG producao Granel; PS producao Saco
+            #if tipo != "PS":
+            #    logger.warn("========== {}.{}=======".format(data["UNIT"], tipo))##########################||||||||||||||||||||||######################
+        else:
+            tipo = "MP" # Matéria Prima
+
+        # Use the function for each movement type
+        if timestampControl:
+            if str(data['MOVEMENT_TYPE']) == '202':
+            ############# MIGO 202 TIMESTAMP ##################################
+                cirruslink_json_migo202LatestTimestamp_tagPath = cirruslink_json_migoLatestTimestamp_Path + '/MIGO{}UpdateTime{}'.format(data['MOVEMENT_TYPE'], tipo, data["MATERIAL_CODE"])
+                skip = processMigoTimestamp('202', data, timestampControl, cirruslink_json_migoLatestTimestamp_Path, cirruslink_json_migo202LatestTimestamp_tagPath, dateFin=dateFin, buggy_check=True)
+                if skip:
+                    if debug:
+                        logger.debug('skip')
+                    continue
+            ############# MIGO 201 TIMESTAMP ##################################
+            elif str(data['MOVEMENT_TYPE']) == '201':
+                cirruslink_json_migo201LatestTimestamp_tagPath = cirruslink_json_migoLatestTimestamp_Path + '/MIGO{}UpdateTime{}{}'.format(data['MOVEMENT_TYPE'], tipo, data["MATERIAL_CODE"])
+                skip = processMigoTimestamp('201', data, timestampControl, cirruslink_json_migoLatestTimestamp_Path, cirruslink_json_migo201LatestTimestamp_tagPath, dateFin=dateFin, buggy_check=True)
+                if skip:
+                    if debug:
+                        logger.debug('skip')
+                    continue
+
+        # ####################### COUNTER N ##########################
+        #systemTagExistsOrCreate(cirruslink_json_path, cirruslink_json_n, 'counter', '0', 'Good')  # debug
+        try:
+	        basePaths, tagConfigs, tags_path = systemTagExistsOrCreate_Bulk(cirruslink_json_path, cirruslink_json_n, "counter", "0", "")
+	        if tagConfigs:
+	            bulkConfig(basePaths, tagConfigs, "o")
+	        nCounter = system.tag.readBlocking([cirruslink_json_n])[0].value
+	        bulkWrite(cirruslink_json_n, nCounter + 1, blocking=True) # system.tag.writeBlocking(cirruslink_json_n, nCounter + 1)
+	        data["ID"] = int(nCounter)  # data = data.update({"ID", nCounter})
+	        jsonTransactionsCounter+=1
+	        if debug:
+	            logger.debug("COUNTER - {}: {} - {}".format(nCounter, type(data), data))
+	        # #############################################################
+        except Exception as e:
+            logger.error("COUNTER N ERROR: {}".format(str(e)))
+        #logger.warn("Control ok 3")
+
+        # ########## Convert DATA to JSON payload ###################
+        ##### dd-mm-YYYY to YYYY-mm-dd as requested by Mulesoft Secil team 2025.02.03
+        #datadmY = datetime.strptime(data["PRODUCTION_DATE"],"%d-%m-%Y")
+        #data["PRODUCTION_DATE"] = datadmY.strftime("%Y-%m-%d")
+        ##############################################################################
+
+        json_payload = json.dumps(data, indent=4, default=str)     
+
+        if 'Output' in base_json_path:
+            logger.debug('json_payload: {} '.format(json_payload))
+
+        json_path = base_json_path + '/' + MATERIAL_CODE
+        if debug:
+            logger.debug('<<json path: {} >>'.format(json_path))
+
+        #logger.warn("Control ok 4")
+
+        # ####################### PAYLOAD UNIQUE ##########################
+        # JSON unique path for all payloads
+        if debug:
+            logger.debug('<<cirruslink json path:  {} >>'.format(cirruslink_json_tagPath))
+        
+        # Write JSON payload to a shared unique tag to be uploaded to MQTT (Cirruslink)
+        if any(MATERIAL_CODE in value for value in materialExcluded): #if MATERIAL_CODE in materialExcluded:
+            if verbose:
+                logger.debug("Payload of code: {} not published - Do not exist in SAP".format(MATERIAL_CODE))
+        else:
+            basePaths, tagConfigs, tags_path = systemTagExistsOrCreate_Bulk(cirruslink_json_path, cirruslink_json_tagPath, "jsonIgnition", json_payload.strip(), "json_payload_to_sap")
+            if tagConfigs:
+                bulkConfig(basePaths, tagConfigs, "o")
+            bulkWrite([cirruslink_json_tagPath], [json_payload], blocking=True) # system.tag.writeBlocking([cirruslink_json_tagPath], [json_payload])
+            if debug:
+                logger.debug('<<system.tag.writeBlocking>>:\n json_path:{} \n json_payload: {}'.format(json_path, json_payload))
+            if sleepTime > 0.01:
+                time.sleep(sleepTime)
+
+            ############# PUBLISH NEW JSON PAYLOAD  ########################
+            #Send it to MQTT Broker via GIS lib or cirruslink.engine
+            if verbose:
+                logger.debug('\r\n <<{}>> Going to publish from running script Mortars.Pataias [{}] [{}]'.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), nCounter, MATERIAL_CODE))
+            
+            try:
+	            if gatewayname != "UNSMACVM-WIN11":
+	                if (data.get("PLANT") and len(data.get("PLANT")) > 3) and \
+	                   (data.get("COST_CENTER") and len(data.get("COST_CENTER")) > 2) and \
+	                   (data.get("STORAGE_LOCATION") and len(data.get("STORAGE_LOCATION")) > 3):
+	                    i = 1
+	                    while not systemCirruslinkEnginePublish(tagValue= data, loggerName = loggerName, codes_to_send_to_sap = codes_to_send_to_sap, 
+	                            error_detected = error_detected, g_tagPath = g_tagPath, mqttTopic_q = mqttTopic_q, mqttTopic_p = mqttTopic_p,  webhook_url_sap = webhook_url_pataias_sap):
+	                        logger.info("<Mortars|Pataias><GISEnginePublish> waiting for MQTT Client - ID:" + str(nCounter) +" trying #" +str(i))
+	                        time.sleep(10)
+	                        i += 1
+	                        if i > 10:
+	                            mqtt_issue(logger, nCounter, i, data, logger_name, error_counter_path, error_on_path, error_detected, maxTimestamptagPath, bulk_write, cirruslink_json_n)
+	                            return None
+	                else:
+	                    if verbose:
+	                        logger.trace('systemCirruslinkEnginePublish skipped - buggy data-{}-{}-{}-{}'.format(data.get("MATERIAL_CODE"),data.get("PLANT"), data.get("COST_CENTER"), data.get("STORAGE_LOCATION")))
+	            else:
+	                print("MQTT publication skipped in development")         
+            except Exception as e:
+                logger.error('MQTT payload not published {}'.format(str(e)))
+                mqtt_issue(logger, nCounter, i, data, logger_name, error_counter_path, error_on_path, error_detected, maxTimestamptagPath, bulk_write, cirruslink_json_n)
+                return None        
+        
+        #logger.warn("Control ok 5")
+        
+        ############ DEBUG | LOG ###
+        if verbose:
+            logger.debug('\r\n<{}> - New MIGO Movement Detected [{}]: {}'.format(nCounter, nCounter, json_payload))
+
+        if json2file:
+            timestamp = str(datetimenow())
+            filename = "{}\\{}.json".format(json_output_dir, MATERIAL_CODE)
+            if debug:
+                logger.debug('<<json filename: >>', filename)
+            with open(filename, 'w') as f:
+                json.dump(data, f, indent=4)
+
+    return json_payload
+
+
+def mqtt_issue(logger, nCounter, i, data, logger_name, error_counter_path, error_on_path, error_detected, maxTimestamptagPath, bulk_write, cirruslink_json_n):
+    logger.info("<Mortars|Pataias><GISEnginePublish> waiting for MQTT Client: " + str(nCounter))
+    time.sleep(10)
+    i += 1
+    if i > 50:
+        error_msg = "<Mortars|Pataias><GISEnginePublish> MQTT Client connection failed for payload: " + str(nCounter) + " " + str(data)
+        send_alarms_teams_webhook(
+            message=error_msg,
+            logger_name=logger_name,
+            error_counter_path=error_counter_path,
+            error_on_path=error_on_path,
+            clear=False,
+            warn=False,
+            error_detected=error_detected,
+            webhook_url = webhook_url_uns_alarms
+        )
+        
+        # Edit MaxTimestamp to allow reprocessing this event again when MQTT client is back again
+        maxTimestamp = system.tag.readBlocking([maxTimestamptagPath])[0].value
+        dt = datetime.strptime(maxTimestamp, "%Y-%m-%d %H:%M:%S")
+        dt_minus1 = dt - timedelta(seconds=1)
+        maxTimestamp1sec = dt_minus1.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Caminho wd_sql_ok está hardcoded. Recomenda-se passar como argumento no futuro.
+        bulk_write(
+            [
+                cirruslink_json_n,
+                "[default]Secil/Portugal/Mortars/Pataias/800 - Electrical Departments/841 - Control Equipment/Edge/Status/WD_SQL_OK",
+                maxTimestamptagPath
+            ],
+            [
+                nCounter - 1,
+                False,
+                maxTimestamp1sec
+            ],
+            blocking=True
+        )
+
+
+def queryPataias(base_query):
+    """
+    Executes a SQL query and returns the column names and results.
+
+    Args:
+        base_query (str): The SQL query to execute.
+
+    Returns:
+        tuple:
+            - columns (list): The list of column names from the query.
+            - results (list): The list of rows returned by the query.
+
+    Raises:
+        Exception: If the query execution fails.
+    """
+    global dataBase
+    # Execute the query
+    try:
+        results = system.db.runQuery(base_query, dataBase)
+        columns = results.getColumnNames()
+        queryResult = sorted(results, key=lambda x: x["PRODUCTION_DATETIME"])
+        results=queryResult
+
+        if debug:
+            print("Query results count:", len(results))
+            print('Query:', base_query)
+            print('tagNames: {}'.format(columns))
+            print('tagValues: {}'.format(results))
+
+    except Exception as e:
+        print("queryPataias error: {}".format(e))#if debug:
+        # Sort the results in ascending order of Timestamp
+                        
+    return columns, results
+  
+
+def filterSqlTag(tagName, tagValue=None):
+    """
+    Filters and cleans a tag name and value from SQL query results.
+
+    - Cleans the tag name.
+    - Processes special cases for specific tags.
+
+    Args:
+        tagName (str): The name of the tag.
+        tagValue (optional): The value of the tag.
+
+    Returns:
+        tuple or str:
+            - If `tagValue` is provided, returns a tuple (tagName, tagValue).
+            - If `tagValue` is None, returns the cleaned tagName.
+    """
+    
+    tagName = clean_tag(tagName)
+
+    if tagValue is not None and isinstance(tagValue, basestring):
+        if debug:
+            print('tagValue: {} is string'.format(tagValue))
+        tagValue = clean_tag(tagValue, name=False)  # Remove spaces and validate
+        if debug:
+            print('> {} : {}'.format(tagName, tagValue))
+    
+    if debug:
+        print('> Timestamp/PRODUCTION_DATETIME: {}'.format(tagValue))
+        
+    return (str(tagName), str(tagValue)) if tagValue is not None else str(tagName)
+
+
+def tagAppend(basePaths, tagConfigs, tag_paths, tag_values, control, row, column, timestamp, basePath):
+    """
+        Appends a tag path and value to the provided lists if the tag meets specific criteria.
+        
+        Args:
+            basePaths
+            tagConfigs
+            tag_paths (list): List of tag paths to update.
+            tag_values (list): List of corresponding tag values.
+            row (dict): Data row containing column-value pairs.
+            column (str): Column name to process.
+            timestamp (datetime): Timestamp for the tag value.
+            basePath (str): Base path for the tag.
+    
+        Returns:
+            tuple: Updated tag_paths and tag_values.
+    
+        Description:
+            Skips specific columns or None values, creates tags if needed, and appends new values if they 
+            are more recent. Uses `filterSqlTag` and `systemTagExistsOrCreate` for processing.
+    
+        Note:
+            Requires external `timestampControl` and `debug` flags, and Ignition's `system.tag` functions.
+        """
+        
+    global sqlColumnsNotToUse
+    
+    value = row[column]
+    if column in sqlColumnsNotToUse or value is None:
+        if debug:
+            print(":skip:",column)
+        return basePaths, tagConfigs, tag_paths, tag_values, control          
+    tagName, tagValue = filterSqlTag(tagName=column, tagValue=value)
+    tag_path = "{}/{}".format(basePath, tagName)
+    basePaths_new, tagConfigs_new, tags_path_new = systemTagExistsOrCreate_Bulk(basePath, tag_path, tagName, tagValue, "")
+    #print(">>>>>>>>>>>>",basePaths)
+    if timestampControl and tags_path_new:
+        tagPreviousValue = system.tag.readBlocking([tag_path])[0]# Read the tag value along with metadata                       
+        tagPreviousTimestamp = tagPreviousValue.timestamp# Get the timestamp of the tag
+        #if tagPreviousTimestamp > timestamp: 
+        if system.date.toMillis(tagPreviousTimestamp) > system.date.toMillis(timestamp): #novo valor nao é mais recente que a valor existente
+            if debug:
+                print('>> {} Skipped by timestamp: {} Previous:{}  SQL:{}'.format(tagName,tag_path, tagPreviousTimestamp,timestamp))
+            return basePaths, tagConfigs, tag_paths, tag_values , control
+        else:
+            if debug:
+                print('>> {}Tag Uppdated {} Previous:{}  SQL:{}'.format(tagName,tag_path,tagPreviousValue,timestamp))   
+    
+    tag_paths = tag_paths + tags_path_new    #tag_paths.append(tags_path_new)
+    tag_values = tag_values + [tagValue] #tag_values.append(qvalue)
+    
+    if tagConfigs_new:
+        basePaths = basePaths +  basePaths_new
+        tagConfigs = tagConfigs + tagConfigs_new #tagConfigs.append(tagConfigs_new)
+        control+=1
+        
+    return basePaths, tagConfigs, tag_paths, tag_values, control
+
+
+def publishPataias(columns, results, basePathQuery, n=[]):
+    """
+    Publishes SQL query results to Ignition tags under the specified base path.
+
+    - Iterates over results and writes data to tags.
+    - Creates tags if they do not exist.
+
+    Args:
+        columns (list): The list of column names from the query.
+        results (list or dict): The query results.
+        basePath (str): The base path for the tags.
+        n (list, optional): Identifier for logging purposes.
+
+    Returns:
+        bool: True if the operation was successful, False otherwise.
+        basePaths, tagConfigs (appended) -> to bulk config
+        tag_paths, tag_values (appended) -> to bulk write
+    Side Effects:
+        - Writes data to Ignition tags.
+    """    
+    if debug:
+        print('<{}> publishPataias: \n Path: {} \n Col\Res: {} \ {}'.format(n, basePathQuery, columns, results))
+    try:
+        if csv:
+            dataset = results # system.dataset.toDataSet(list(columns), list(results))
+            csv_data = system.dataset.toCSV(dataset, False)
+            system.file.writeFile(json_output_dir + '/sqlData.csv', csv_data, True) 
+
+        tag_paths = [] 
+        tag_values = []
+        basePaths = []
+        tagConfigs = []
+        control = 0
+        basePath = basePathQuery
+        
+        # Publish each column to an Ignition tag
+        if isinstance(results, list):
+            for row in results:
+                datahora = row["PRODUCTION_DATETIME"] 
+                timestamp = system.date.parse(datahora, "yyyy-MM-dd HH:mm:ss")
+                if "InputSilos" in basePathQuery:
+                    basePath = basePathQuery + "/" +  row["SILO"]
+                    #print("Silo: ", row["SILO"])
+                    #print("basePath: ", basePath)
+                    #print("basePaths: ", basePaths)
+                for column in columns:
+                    basePaths, tagConfigs, tag_paths, tag_values, control = tagAppend(basePaths, tagConfigs, tag_paths, tag_values, control, row, column, timestamp,basePath)
+                    #print("BP1: [{}] {} - control: {}".format(len(basePaths), basePaths, control))
+        else:
+            datahora = results["PRODUCTION_DATETIME"] 
+            timestamp = system.date.parse(datahora, "yyyy-MM-dd HH:mm:ss")
+            if "InputSilos" in basePathQuery:
+                basePath = basePathQuery + "/" +  row["SILO"]
+            for column in columns:
+                basePaths, tagConfigs, tag_paths, tag_values, control = tagAppend(basePaths, tagConfigs, tag_paths, tag_values, control, results, column, timestamp, basePath)
+                #print("BP2: [{}] {} - control: {}".format(len(basePaths), basePaths, control))
+        # batch write is to be make on a parent function
+        if tag_paths:
+            #time.sleep(10)#
+            if debug:
+                print(basePaths, tagConfigs, tag_paths, tag_values)
+            #bulkConfig(basePaths, tagConfigs, "o")
+            #bulkWrite(tag_paths, tag_values, blocking=False) # system.tag.writeAsync(tag_paths, tag_values) #system.tag.writeBlocking(tag_paths, tag_values)
+            if debug:
+                print('Path:{}'.format(basePath))
+                print('TagPath || Value: {} || {}'.format(tag_paths, tag_values))
+        return True, basePaths, tagConfigs, tag_paths, tag_values
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        last_tb = traceback.extract_tb(sys.exc_info()[2])[-1]
+        line_number = last_tb[1]
+        print("<Line:{}>:".format(line_number))
+        print('Error in publishPataias: {}'.format(e))
+        logger.error("Error updating  Mortars|Pataias data: {}".format(e))
+        return False, basePaths, tagConfigs, tag_paths, tag_values
+
+
+def getLastProdCode(basePath):
+    
+    global lastProdCode, lastBatchCode
+
+    base_query_producao_saco, base_query_producao_granel, base_query_consumo, base_query_wd_uns, base_query_getLastProdCode = get_queries()
+    query_getLastProdCode = base_query_getLastProdCode
+    #query_getLastProdCode = get_queries()[-1]
+
+    #r=system.db.runQuery(query_getLastProdCode, dataBase)
+    columns, values = queryPataias(query_getLastProdCode)
+    lastProdCode =  values[0][0].strip().encode('utf-8')
+    lastBatchCode = values[0][1].strip().encode('utf-8')
+    if verbose:
+        bulkList = kg_list + to_list #vs: un_list
+        bulkORbag = "Producao Granel <2>" if lastProdCode in bulkList else "Producao Sacos <1>" 
+        print("||      Material in Production:  <<{}>>   [[ {} ]] [[Batch:{}]]      || \r\n{}".format(lastProdCode, bulkORbag, lastBatchCode, "=" * 100))
+    
+    #lastProdCode #### SAVE ############################################
+    try:
+        lastProdCodePath = basePath +'/lastProdCode'
+        lastBatchCodePath = basePath +'/lastBatchCode'
+        basePathsP, tagConfigsP, tags_pathP = systemTagExistsOrCreate_Bulk(
+            basePath, lastProdCodePath, "lastProdCode", "", "Latest Production Material from SQL"
+        )
+        basePathsB, tagConfigsB, tags_pathB = systemTagExistsOrCreate_Bulk(
+            basePath, lastBatchCodePath, "lastBatchCode", "", "Current Batch from SQL"
+        )
+        
+        # Combine the tag configurations from both calls
+        combinedBasePaths = basePathsP + basePathsB
+        combinedTagConfigs = tagConfigsP + tagConfigsB
+        
+        if combinedTagConfigs:  # Ensure there's a non-empty configuration before calling bulkConfig
+            bulkConfig(combinedBasePaths, combinedTagConfigs, "o")
+        
+        bulkWrite([lastProdCodePath, lastBatchCodePath], [lastProdCode, lastBatchCode], blocking=True)
+
+    except Exception as e:
+        logger.error("lastProdCode error".format(str(e)))
+        print("ERR lastProdCode")
+    
+    return lastProdCode, lastBatchCode
+
+
+def get_queries():
+    """
+    Retrieves the SQL queries for Pataias Mortars data.
+
+    Returns:
+        tuple:
+            - base_query_getLastProdCode
+            - base_query_producao_saco (str): SQL query for bagged production.
+            - base_query_producao_granel (str): SQL query for bulk production.
+            - base_query_consumo (str): SQL query for silo consumption.
+            - base_query_wd_uns (str): SQL query for watchdog data.
+    """
+
+    base_query_getLastProdCode = """
+            SELECT
+                -- Compute a 5-character material code from producao.codigo
+                LEFT(
+                    CASE 
+                        WHEN LOCATE('v', producao.codigo) > 0 
+                        THEN LEFT(producao.codigo, LOCATE('v', producao.codigo) - 1) 
+                        ELSE producao.codigo 
+                    END, 5) AS MATERIAL_CODE,               
+                #producao.codigo AS MATERIAL_CODE_COMPLETE #
+                SeqOf as BATCH,
+                DATE_FORMAT(producao.dh_producao, '%Y-%m-%d %H:%i:%s') AS PRODUCTION_DATETIME
+            FROM estfeed.producao
+            WHERE producao.dh_producao >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            ORDER BY producao.dh_producao DESC
+            LIMIT 1;
+                                """
+    
+    base_query_producao_granel = """
+            SELECT
+                -- Compute a 5-character material code from p.codigo
+                LEFT(
+                    CASE 
+                        WHEN LOCATE('v', p.codigo) > 0 
+                            THEN LEFT(p.codigo, LOCATE('v', p.codigo) - 1) 
+                        ELSE p.codigo 
+                    END, 5) AS MATERIAL_CODE,
+                
+                MAX(p.descricao) AS MATERIAL_DESC,
+                SUM(p.Valor) AS QUANTITY,
+                
+                DATE_FORMAT(MAX(p.dh_producao), '%Y-%m-%d %H:%i:%s') AS PRODUCTION_DATETIME,
+                DATE_FORMAT(MAX(p.dh_producao), '%Y-%m-%d') AS PRODUCTION_DATE,
+                DATE_FORMAT(MAX(p.dh_producao), '%H:%i:%s') AS PRODUCTION_HOUR,
+                
+                -- Use ANY_VALUE to bypass ONLY_FULL_GROUP_BY for the cost centre
+                cp.COD_PA AS COST_CENTER,
+                
+                p.SeqOf as BATCH,
+                -- HARDCODED AND FIXED IN THIS QUERY
+                'KG' as UNIT,  -- CASE WHEN SUM(p.Valor) = FLOOR(SUM(p.Valor)) THEN 'KG' ELSE 'TO' END AS UNIT,
+                '9630' AS PLANT,            -- PATAIAS
+                '202' AS MOVEMENT_TYPE,     -- MOVEMENT_TYPE_201_202 | Produção: 202
+                '963J' AS STORAGE_LOCATION, -- 963H_OR_963J | Produção: 963J
+                -- HARDCODED AND FIXED IN ALL MORTARS QUERIES
+                '999' AS MOVEMENT_REASON,
+                'MIGO' AS TRANSACTION,
+                'Saida Mercadorias' AS OPERATION,
+                'Outros/as ' AS REFERENCE_DOC,
+                
+                -- Compute FORMULA using 8 characters to match the join condition
+                LEFT(
+                    CASE 
+                        WHEN LOCATE('v', p.codigo) > 0 
+                            THEN LEFT(p.codigo, LOCATE('v', p.codigo) - 1) 
+                        ELSE p.codigo 
+                    END, 8) AS FORMULA,
+                
+                -- DEBUG ONLY:--------------
+                p.codigo AS MATERIAL_CODE_COMPLETE,
+                CONCAT(p.codigo, '_', p.SeqOf) AS PROD_BATCH,
+                MAX(p.Destino) AS DESTINO
+            
+            FROM estfeed.producao AS p
+            LEFT JOIN estfeed.cod_pa AS cp 
+                ON LEFT(
+                      CASE 
+                          WHEN LOCATE('v', p.codigo) > 0 
+                              THEN LEFT(p.codigo, LOCATE('v', p.codigo) - 1) 
+                          ELSE p.codigo 
+                      END, 8) = cp.codigo
+            
+            WHERE p.dh_producao >= DATE_SUB(NOW(), INTERVAL 15 DAY)
+                and  DESTINO NOT LIKE '%Ensaque%'
+            GROUP BY p.codigo, p.SeqOf, cp.COD_PA
+            ORDER BY PRODUCTION_DATETIME DESC
+            LIMIT 1000;
+                                """
+
+    #Estamos a usar outra query | ver abaixo
+    base_query_producao_saco = """
+            SELECT DISTINCT
+                -- LEFT(ensaque.Codigo, 5) AS MATERIAL_CODE_OLD,  -- #ensaques -> ensaque 2025.04.04  | AP e AN
+                CONCAT(                                                               
+                 SUBSTRING(ensaque.Tipo, 1, 2),
+                 SUBSTRING(ensaque.Codigo, 3, 3)
+                ) AS MATERIAL_CODE,                         --  usar em Outubro 2025  ||    2025.08.01 (AP,AN,AI,AJ,AH)
+                ensaque.Descri AS MATERIAL_DESC,
+                ensaque.Quant AS QUANTITY,
+                
+                DATE_FORMAT(ensaque.DH, '%Y-%m-%d %H:%i:%s') AS PRODUCTION_DATETIME,
+                DATE_FORMAT(ensaque.DH, '%Y-%m-%d') AS PRODUCTION_DATE,
+                DATE_FORMAT(ensaque.DH, '%H:%i:%s') AS PRODUCTION_HOUR,
+                
+                cp.COD_PA AS COST_CENTER,  -- Retrieves cost centre from cod_pa table
+                
+                '9630' AS PLANT,            -- PATAIAS
+                'UN' AS UNIT,               -- UNIT_KG_TO_UN | ensaque production in Un
+                '202' AS MOVEMENT_TYPE,     -- MOVEMENT_TYPE_201_202 | ensaques: 202  
+                '963J' AS STORAGE_LOCATION, -- 963H_OR_963J | ensaque: 963J  
+                '999' AS MOVEMENT_REASON,
+                'MIGO' AS TRANSACTION,
+                'Saida Mercadorias' AS OPERATION,
+                'Outros/as ' AS REFERENCE_DOC,
+                
+                -- ensaque.Peso AS PESO,     -- Debug: Weight
+                ensaque.codigo AS FORMULA -- Formula code used for the join
+                
+            FROM estfeed.ensaque
+            LEFT JOIN estfeed.cod_pa AS cp
+                ON ensaque.codigo = cp.codigo
+            WHERE ensaque.DH >= DATE_SUB(NOW(), INTERVAL 15 DAY)
+                        
+            ORDER BY PRODUCTION_DATETIME DESC
+            LIMIT 250;
+                                """
+    # Provisorio Workaround 2025.08.21 | Combater timestamps duplicados
+    base_query_producao_saco = """
+			SELECT
+			    -- Columns that identify the group
+			    CONCAT(
+			      SUBSTRING(ensaque.Tipo, 1, 2),
+			      SUBSTRING(ensaque.Codigo, 3, 3)
+			    ) AS MATERIAL_CODE,
+			    ensaque.Descri AS MATERIAL_DESC,
+			    cp.COD_PA AS COST_CENTER,
+			    ensaque.codigo AS FORMULA,
+			    
+			    -- The timestamp is the primary key for grouping
+			    DATE_FORMAT(ensaque.DH, '%Y-%m-%d %H:%i:%s') AS PRODUCTION_DATETIME,
+			    DATE_FORMAT(ensaque.DH, '%Y-%m-%d') AS PRODUCTION_DATE,
+			    DATE_FORMAT(ensaque.DH, '%H:%i:%s') AS PRODUCTION_HOUR,
+			
+			    -- Aggregated values for the group
+			    SUM(ensaque.Quant) AS QUANTITY,      -- Sum the quantity for all records with the same timestamp
+			    SUM(ensaque.Peso) AS TOTAL_PESO,    -- Sum the weight as requested
+			    
+			    -- Static values (remain the same for all rows)
+			    '9630' AS PLANT,
+			    'UN' AS UNIT,
+			    '202' AS MOVEMENT_TYPE,
+			    '963J' AS STORAGE_LOCATION,
+			    '999' AS MOVEMENT_REASON,
+			    'MIGO' AS TRANSACTION,
+			    'Saida Mercadorias' AS OPERATION,
+			    'Outros/as ' AS REFERENCE_DOC
+			    
+			FROM estfeed.ensaque
+			LEFT JOIN estfeed.cod_pa AS cp
+			    ON ensaque.codigo = cp.codigo
+			WHERE ensaque.DH >= DATE_SUB(NOW(), INTERVAL 15 DAY)
+			            
+			GROUP BY
+			    ensaque.DH,          -- Group by the raw timestamp to collapse duplicates
+			    MATERIAL_CODE,       -- Also group by other identifiers to avoid incorrect aggregation
+			    ensaque.Descri,      -- if different materials share the exact same timestamp.
+			    cp.COD_PA,
+			    ensaque.codigo
+			            
+			ORDER BY PRODUCTION_DATETIME DESC
+			LIMIT 250;
+"""
+
+    base_query_consumo = """
+            SELECT
+                c.codigo AS MATERIAL_CODE,
+                LEFT(mp.codforn, 5) AS CODE_SAP,
+                MAX(m.Fornecedor) AS CODE_SAP_OPERATOR,
+                MAX(c.descricao) AS MATERIAL_DESC,
+                SUM(c.Valor) AS QUANTITY,
+                DATE_FORMAT(MAX(c.DH_consumo), '%Y-%m-%d %H:%i:%s') AS PRODUCTION_DATETIME,
+                DATE_FORMAT(MAX(c.DH_consumo), '%Y-%m-%d') AS PRODUCTION_DATE,
+                DATE_FORMAT(MAX(c.DH_consumo), '%H:%i:%s') AS PRODUCTION_HOUR,
+                cp_dist.COD_PA AS COST_CENTER,
+                'KG' AS UNIT,
+                '9630' AS PLANT,           
+                '201' AS MOVEMENT_TYPE,
+                '963H' AS STORAGE_LOCATION,
+                '999' AS MOVEMENT_REASON,
+                'MIGO' AS TRANSACTION,
+                'Saida Mercadorias' AS OPERATION,
+                'Outros/as ' AS REFERENCE_DOC,
+
+                /* Compute the PRODUTO code from p.codigo */
+                LEFT(
+                    CASE 
+                        WHEN LOCATE('v', p.codigo) > 0
+                            THEN LEFT(p.codigo, LOCATE('v', p.codigo) - 1)
+                        ELSE p.codigo
+                    END,
+                    5
+                ) AS PRODUTO,
+                p.SeqOf AS BATCH
+            
+            FROM estfeed.consumos c
+            
+            LEFT JOIN estfeed.producao p
+                ON c.Seq = p.Seq
+            
+            JOIN (
+                SELECT DISTINCT
+                    cp.cod_pa,
+                    LEFT(
+                        CASE
+                            WHEN LOCATE('v', cp.codigo) > 0
+                                THEN LEFT(cp.codigo, LOCATE('v', cp.codigo) - 1)
+                            ELSE cp.codigo
+                        END,
+                        5
+                    ) AS join_key
+                FROM estfeed.cod_pa cp
+            ) AS cp_dist
+                ON LEFT(
+                    CASE
+                        WHEN LOCATE('v', p.codigo) > 0
+                            THEN LEFT(p.codigo, LOCATE('v', p.codigo) - 1)
+                        ELSE p.codigo
+                    END,
+                    5
+                ) = cp_dist.join_key
+            
+            JOIN estfeed.mp mp
+                ON c.codigo = mp.CODIGO
+            
+            LEFT JOIN (
+                SELECT
+                    lote_origem,
+                    Fornecedor
+                FROM estfeed.movmp
+                WHERE Movimento = 'Entrada em Armazém'
+            ) AS m
+                ON c.LoteMP = m.lote_origem
+            
+            WHERE
+                c.DH_consumo >= DATE_SUB(NOW(), INTERVAL 14 DAY)
+                AND c.DH_consumo < {end_date}
+            
+            GROUP BY p.SeqOf, c.codigo, p.codigo, cp_dist.COD_PA
+            
+            ORDER BY PRODUCTION_DATETIME DESC
+            
+            LIMIT 2500;
+                        """
+
+    base_query_wd_uns =  """
+            SELECT
+                ID AS WD,
+                DATE_FORMAT(phases.DH_I, '%Y-%m-%d %H:%i:%s') AS PRODUCTION_DATETIME
+            FROM estfeed.phases
+            WHERE phases.DH_I >= DATE_SUB(NOW(), INTERVAL 3 DAY)
+            ORDER BY phases.DH_I DESC
+            LIMIT 2;
+                        """
+
+    return base_query_producao_saco, base_query_producao_granel, base_query_consumo, base_query_wd_uns, base_query_getLastProdCode
+
+
+def SCADA(mode, base_query, basePath, normPathSap, normPath, sacoGranel=""):
+    """
+    Executes queries, publishes data, normalizes data, and handles optional JSON conversion.
+
+    Args:
+        mode (str): Mode of operation ('P' for production, 'MP' for consumption).
+        base_query (str): The SQL query to execute.
+        basePath (str): The base path for raw data tags.
+        normPathSap (str): The path for Normalised SAP data.
+        normPath (str): The path for Normalised data.
+        loop (bool, optional): Whether to loop over multiple indices (for consumption data).
+        N - do no use
+        s_f_m  - do no use
+        sacoGranel (str, optional): Indicator for bagged or bulk production.
+
+    Returns:
+        tuple: (bool, basePathsALL, tagConfigsALL, tag_pathsALL, tag_valuesALL)
+    """
+    global norm_en, json_en, raw_en
+    
+    basePathsALL = []
+    tagConfigsALL = []
+    tag_pathsALL = []
+    tag_valuesALL = []
+
+
+    #  last Sunday 23:59:59 or last day of the month  | 
+
+    #sql_end_date = """
+    #GREATEST(
+    #    DATE_ADD(DATE_SUB(CURDATE(), INTERVAL (DAYOFWEEK(CURDATE())) DAY), INTERVAL 23 HOUR + 59 MINUTE + 59 SECOND),
+    #    DATE_ADD(LAST_DAY(DATE_SUB(CURDATE(), INTERVAL 1 MONTH)), INTERVAL 23 HOUR + 59 MINUTE + 59 SECOND)
+    #)
+    #"""
+    
+    sql_end_date = """
+    GREATEST(
+      DATE_ADD(
+        DATE_SUB(CURDATE(), INTERVAL (DAYOFWEEK(CURDATE()) - 1) DAY),
+        INTERVAL 1 DAY
+      ) - INTERVAL 1 SECOND,
+      DATE_ADD(
+        LAST_DAY(DATE_SUB(CURDATE(), INTERVAL 1 MONTH)),
+        INTERVAL 1 DAY
+      ) - INTERVAL 1 SECOND
+    )
+    """
+
+    if True:
+        try:
+            if mode=="MP": #with sql placeholder:
+                query = base_query.format(end_date=sql_end_date)
+            else:
+                query = base_query
+            columns, results = queryPataias(query)
+            if results and columns:
+                ucolumns = [str(col) for col in columns]
+
+                if raw_en:
+                    publishPataias_ok, basePaths, tagConfigs, tag_paths, tag_values = publishPataias(ucolumns, results, basePath, 0)
+                    if publishPataias_ok:
+                        basePathsALL.extend(basePaths)
+                        tagConfigsALL.extend(tagConfigs)
+                        tag_pathsALL.extend(tag_paths)
+                        tag_valuesALL.extend(tag_values)
+                if debug:
+                    print("<P><SCADA> Paths:{}, {} ".format(basePath, normPath))
+
+                if True: #json_en:
+                    json_payload = convert_to_json(tagValues=results, tagNames=ucolumns, base_json_path=normPathSap)
+                    #if sacoGranel == "GRANEL": ##################################################||||||||
+                    #    logger.warn("==========: PG: {} \r\n {}".format(ucolumns, results))
+                    #    logger.warn("========== PG: {}:{}".format(sacoGranel, json_payload))
+                if norm_en:
+                    norm_ok, basePaths, tagConfigs, tag_paths, tag_values = norm(tagValues=results, tagNames=ucolumns, base_path=normPath)
+                    if norm_ok:
+                        basePathsALL.extend(basePaths)
+                        tagConfigsALL.extend(tagConfigs)
+                        tag_pathsALL.extend(tag_paths)
+                        tag_valuesALL.extend(tag_values)
+
+        except Exception as e:
+            print("Error in SCADA ({}): {}".format(mode, str(e)))
+            return False, [], [], [], []
+
+    try:
+        bulkConfig(basePathsALL, tagConfigsALL, "o")
+        time.sleep(0.1)
+        bulkWrite(tag_pathsALL, tag_valuesALL, blocking=False)
+        if debug:
+            print(basePathsALL)
+    except Exception as e:
+        print("Error in bulk operations:" + str(e))
+        return False, [], [], [], []
+
+    if debug:
+        print("-" * 40)
+        print("SCADA only BULK config and WRITE per SQL_Query: ")
+        print("Config for New Tags\n basePaths: ", basePathsALL)
+        print("tagConfigs", tagConfigsALL)
+        print("LEN:", len(basePathsALL))
+        print("-" * 40)
+        print("To write\n tag_paths: ", tag_pathsALL)
+        print("tag_values: ", tag_valuesALL)
+        print("-" * 40)
+
+    return True, basePathsALL, tagConfigsALL, tag_pathsALL, tag_valuesALL
+
+
+def core(startTime, basePath, normPath, jsonSapNormPath, PathProducao, PathProducaoNorm, PathProducaoNormSap, PathConsumo, PathConsumoNorm, PathConsumoNormSap, PathWD, mov):
+    """
+    Orchestrates the main workflow of querying, processing, and publishing Pataias Mortars data.
+
+    - Retrieves SQL queries.
+    - Processes production data (bagged and bulk).
+    - Processes consumption data (silos, manual, fibers) if enabled.
+    - Handles watchdog data.
+
+    Args:
+        startTime: The timestamp when the function started.
+        basePath (str): The base path for raw data.
+        normPath (str): The base path for Normalised data.
+        jsonSapNormPath (str): The base path for Normalised SAP JSON data.
+        PathProducao (str): The path for production data.
+        PathProducaoNorm (str): The path for Normalised production data.
+        PathProducaoNormSap (str): The path for Normalised SAP production data.
+        PathConsumo (str): The path for consumption data.
+        PathConsumoNorm (str): The path for Normalised consumption data.
+        PathConsumoNormSap (str): The path for Normalised SAP consumption data.
+        PathWD (str): The path for watchdog data.
+
+    Side Effects:
+        - Executes multiple `SCADA()` calls.
+        - Updates watchdog tags.
+    """
+    global MP_en, PG_en, PS_en, ref_en, WD_en, resetTags
+    
+    # Get all queries
+    base_query_producao_saco, base_query_producao_granel, base_query_consumo, base_query_wd_uns, base_query_getLastProdCode = get_queries()
+
+    #0
+    if resetTags: #Tags = 0 (AXIOM)
+        #logger.info("<Mortars|Pataias Script Tag RESETTED>")
+        ResetTagsValue(basePath="[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Normalised/Output Materials",batchTagPath="[default]Secil/Portugal/Mortars/Pataias/800 - Electrical Departments/841 - Control Equipment/Edge/Status/lastProdCode")
+        ResetTagsValue(basePath="[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Normalised/Input Materials", batchTagPath="[default]Secil/Portugal/Mortars/Pataias/800 - Electrical Departments/841 - Control Equipment/Edge/Status/lastProdCode")
+    
+    # 1|2 Produto Acabado - Production operations
+    # 1 Bag Production
+    if PS_en and '202' in mov:
+        if verbose:
+            logger.debug("\r\n<1 - Producao a saco>")
+        SCADA(mode="P", base_query=base_query_producao_saco, basePath=PathProducao, normPathSap=PathProducaoNormSap,
+              normPath=PathProducaoNorm, sacoGranel="SACO")
+
+    # 2 Bulk Prodution
+    if PG_en and '202' in mov:
+        if verbose:
+            logger.debug("\r\n<2 - Producao a granel>")
+        SCADA(mode="P", base_query=base_query_producao_granel, basePath=PathProducao, normPathSap=PathProducaoNormSap,
+              normPath=PathProducaoNorm, sacoGranel="GRANEL")
+    
+    # 3 Materias Primas - Raw materials
+    # Consumption [raw material] operations
+    if MP_en and '201' in mov:
+        if verbose:
+            logger.debug("\r\n<3 - Materias Primas: Silos>")
+        SCADA(mode="MP", base_query=base_query_consumo, basePath=PathConsumo, normPathSap=PathConsumoNormSap,
+              normPath=PathConsumoNorm)
+    
+    # 4 Normalised Tags: References | Só criar nova se tivermos um produto novo
+    if ref_en:
+        if verbose:
+            logger.debug("\r\n<4 - Referencing Norm Tags>")
+        #Create Reference Tags for Normalised in Mortars|Pataias (for Input and Output nomr paths)
+        ReferencedTagsPerPath(goUpLevels(normPath,1), folderName = "Output Materials")
+        ReferencedTagsPerPath(goUpLevels(normPath,1), folderName = "Input Materials")
+            
+    #WD UNS
+    if WD_en:
+        if verbose:
+            logger.debug("\r\n<5 - WatchDog>")
+        wd_check = '201' not in mov # use this if MIGO201 and MIGO202 scripts have 2 distint trigger (with a <10min difference)
+        wdPataias(PathWD, base_query_wd_uns, wd_check) #WD control Ignition
+
+def pataias_query_and_publish(basePath="[default]Secil/Portugal/Mortars/Pataias/800 - Electrical Departments/841 - Control Equipment/Edge", 
+                              normPath="[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Edge",
+                              mov=['201', '202']):
+    """
+    Main function to query and publish Pataias Mortars SQL data to Ignition SCADA tags.
+
+    Workflow Overview:
+    -------------------
+    1. **Environment Setup**:
+       - Determines if the script is running in a development or production environment.
+       - Sets global variables like `sleepTime`, `tryExcept`, `verbose`, and `json2file` based on the environment.
+       - Initializes the logger and sets up base paths for raw data and Normalised data.
+
+    2. **Core Processing** (`core()` Function):
+       - **Retrieve SQL Queries**:
+         - Calls `get_queries()` to get the necessary SQL queries for production and consumption data.
+       - **Process Production Data**:
+         - **Production of Bagged Products**:
+           - Calls `SCADA()` with mode `'P'` and the bagged products query.
+           - Executes the query, publishes raw data, and optionally normalizes and converts data to JSON.
+         - **Production of Bulk Products**:
+           - Similar to bagged products, but uses the bulk products query.
+       - **Process Consumption Data** (if `MP_en` is `True`):
+         - **Consumption from Silos**:
+           - Calls `SCADA()` with mode `'MP'` and loops over silos.
+         - **Manual Consumption**:
+           - Calls `SCADA()` for manual entries.
+         - **Fiber Consumption**:
+           - Calls `SCADA()` for fiber materials.
+       - **Watchdog Handling**:
+         - Queries watchdog data using `queryPataias()`.
+         - Publishes watchdog data using `publishPataias()`.
+         - Updates watchdog tags using `wdPataias()`.
+
+    3. **Exception Handling**:
+       - If `tryExcept` is `True`, wraps the core processing in a try-except block to handle any exceptions.
+       - Logs Java exceptions and general exceptions separately.
+       - Updates the watchdog tags to indicate success or failure.
+
+    Function Connections:
+    ----------------------
+    - `pataias_query_and_publish()` calls `core()`.
+    - `core()` calls:
+        - `get_queries()`
+        - Multiple `SCADA()` calls with different parameters.
+        - `wdPataias()`
+    - `SCADA()` calls:
+        - `queryPataias()`
+        - `publishPataias()`
+        -  `convert_to_json()`, and `norm()` based on configuration flags.
+    - `publishPataias()` calls:
+        - `systemTagExistsOrCreate_Bulk()`
+        - `filterSqlTag()`
+    - `wdPataias()` calls `systemTagExistsOrCreate_Bulk()` for watchdog tags.
+
+    Outputs:
+    ---------
+    - Data written to Ignition tags under specified paths (`basePath` and `normPath`).
+    - JSON payloads created and written to tags or files.
+    - Logs recorded using the logger.
+
+    Usage:
+    ------
+    ```
+    from Mortars.Pataias import pataias_query_and_publish
+    pataias_query_and_publish()
+    ```
+    """
+    global systemTagConfigurations
+    global jsonTransactionsCounter
+    global json_en, jsonPerMIGO, raw_en, norm_en, ref_en, WD_en, debug, dataBase, sleepTime, tryExcept, verbose, MP_en, PG_en, PS_en, json2file, timestampControl, logger 
+ 
+    startTime = now()  # Get the current time at the start of the function
+    if gatewayname == "UNSMACVM-WIN11":
+        print("{}\r\nRUNNING ON A DEVELOPMENT VM | {}  |  {}".format("="*100, gatewayname, hostname, startTime))
+    else:
+        print("{}\r\nRUNNING ON A PRODUCTION SERVER | {}  |  {}".format("="*100, gatewayname, hostname))
+    print('<{}> Flags: json_en:{} jsonPerMIGO:{} raw_en:{} norm_en:{} ref_en:{} WD_en:{} debug:{}  dataBase:{} \n\r sleepTime:{} tryExcept:{} verbose:{} MP|PG|PS_en:{}|{}|{} json2file:{} timestampControl:{} \n\r logger: {} \r\n{}'.format(startTime, bool(json_en), bool(jsonPerMIGO), bool(raw_en), bool(norm_en), bool(ref_en), bool(WD_en), bool(debug), dataBase, sleepTime, bool(tryExcept), bool(verbose), bool(MP_en), bool(PG_en), bool(PS_en), bool(json2file), bool(timestampControl), logger,"="*100)) 
+    function_name = currentframe().f_code.co_name  # Log the elapsed time
+    script_name = getfile(currentframe())
+                
+    jsonSapNormPath = normPath
+
+    PathProducao = basePath + "/OutputBatch"
+    PathProducaoNorm = normPath + "/Output Materials"
+    PathProducaoNormSap = normPath + "/SAP/MIGO202"
+
+    PathConsumo = basePath + "/InputSilos"
+    PathConsumoNorm = normPath + "/Input Materials"
+    PathConsumoNormSap = normPath + "/SAP/MIGO201"
+
+    PathWD = basePath + "/Status"
+    
+    mov_info = " + ".join([
+        "MIGO202" if "202" in mov else "",
+        "MIGO201" if "201" in mov else ""
+    ]).strip()
+
+    if tryExcept:
+        try:
+            getLastProdCode(PathWD)
+            logger.info("<Mortars|Pataias Script has started for {}: {}.>".format(str(mov_info), str(startTime))) #trace nao logga??
+            if verbose:
+                print("<Mortars|Pataias Script has started for {}: {}.>".format(str(mov_info), str(startTime)))
+            core(startTime, basePath, normPath, jsonSapNormPath, PathProducao, PathProducaoNorm, PathProducaoNormSap, PathConsumo, PathConsumoNorm, PathConsumoNormSap, PathWD, mov)
+
+        except JavaException as e:
+            # Handle java.lang.Exception specifically
+            error_msg = "Java error | db: {} | {}".format(dataBase, e)
+            send_alarms_teams_webhook(message = error_msg, logger_name = logger_name,
+                        error_counter_path = error_counter_path, error_on_path = error_on_path,
+                        clear = False, warn=False, error_detected = error_detected, webhook_url = webhook_url_uns_alarms)
+            #logger.error("Java error | db: {} | {}".format(dataBase, e))
+            bulkWrite( [PathWD + "/WD_SQL_OK", PathWD + "/WD_UNS"],  [[0],[-1]], blocking=True) # Set WD to 0 on error
+            #system.tag.writeBlocking(PathWD + "/WD_SQL_OK", [0])  # Set WD to 0 on error
+            #system.tag.writeBlocking(PathWD + "/WD_UNS", [-1])
+            print("Java error: | db: {} | {}\n Pataias Terminated with ERRORS \n".format(dataBase, e))
+        except Exception as e:
+            # Handle any other general exceptions
+            error_msg = "General error: {}".format(e)
+            send_alarms_teams_webhook(message = error_msg, logger_name = logger_name,
+                        error_counter_path = error_counter_path, error_on_path = error_on_path,
+                        clear = False, warn=False, error_detected = error_detected, webhook_url = webhook_url_uns_alarms)
+            #logger.error("General error: {}".format(e))
+            bulkWrite([PathWD + "/WD_SQL_OK", PathWD + "/WD_UNS"],  [[0],[-2]], blocking=True) # Set WD to 0 on error
+            #system.tag.writeBlocking(PathWD + "/WD_SQL_OK", [0])  # Set WD to 0 on error
+            #system.tag.writeBlocking(PathWD + "/WD_UNS", [-2])
+            print("General error: {}\n Pataias Terminated with ERRORS \n".format(e))
+        else:
+            endTime = now()  # Get the current time at the end of the function
+            elapsedTime = secondsBetween(startTime, endTime)  # Calculate the elapsed time
+    
+            #error_on_path = "[default]Secil/Portugal/Mortars/Pataias/500 - Production and Grinding/534 - Production Mixer/Edge/SAP/MIGO/error_on"
+            error_on = system.tag.readBlocking([error_on_path])[0].value
+            if not error_on and not error_detected: # We had an previous error flaged, but it is all clear in this script execuction
+                ok_msg = "**All alarms cleared. Normal operations resumed.**"
+                send_alarms_teams_webhook(message = ok_msg, logger_name = logger_name,
+                            error_counter_path = error_counter_path, error_on_path = error_on_path,
+                            clear = True, warn=False, error_detected = error_detected, webhook_url = webhook_url_uns_alarms)
+            logger.info("<Mortars|Pataias Terminated> Script: {}, Function: {}, Time elapsed: {} seconds".format(script_name, function_name, elapsedTime))
+            print("<Mortars|Pataias Terminated><Script: {}, Function: {}, Time elapsed: {} seconds> \n <<Success!>> Pataias Terminated @ {}".format(script_name, function_name, elapsedTime, endTime))    
+    
+    else:
+        getLastProdCode(PathWD)
+        core(startTime, basePath, normPath, jsonSapNormPath, PathProducao, PathProducaoNorm, PathProducaoNormSap, PathConsumo, PathConsumoNorm, PathConsumoNormSap, PathWD, mov)
+        print("\r\n<<Success!>> Pataias Terminated <Without tryExcept>")
+        print("<Number of json Transactions Published ({})>".format(jsonTransactionsCounter))
+        print("<Number of system.tag.writeBlocking|writeAsync({})>".format(systemTagWrite))
+        print("<Number of system.tag.contigure({})>".format(systemTagConfigurations))

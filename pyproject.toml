@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uns-metadata-sync-svc"
+version = "0.1.0"
+description = "Sparkplug B metadata synchronization service"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "paho-mqtt>=2.1",
+    "protobuf>=4.25",
+    "python-dotenv>=1.0",
+    "psycopg2-binary==2.9.10",
+    "psycopg2==2.9.10",
+    "httpx>=0.27",
+    "black>=25.9.0",
+]
+
+[project.scripts]
+uns-metadata-sync = "uns_metadata_sync:main"
+
+[project.optional-dependencies]
+dev = [
+    "black>=25.9.0",
+    "jsonschema>=4.25.1",
+    "mypy>=1.18.2",
+    "pre-commit>=4.3.0",
+    "psycopg2-binary==2.9.10",
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.13.2",
+    "httpx>=0.27",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"uns_metadata_sync.migrations" = ["sql/*.sql"]
+
+[tool.pytest.ini_options]
+markers = [
+  "unit: fast, isolated",
+  "integration: db/mocks/slow",
+  "contract: schema/fixture contracts"
+]
+addopts = "-ra"

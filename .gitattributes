@@ -1,2 +1,29 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalize text files to LF in the repository
+*           text=auto
+
+# Common text formats
+*.py        text eol=lf
+*.toml      text eol=lf
+*.md        text eol=lf
+*.rst       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.json      text eol=lf
+*.csv       text eol=lf
+*.sql       text eol=lf
+*.sh        text eol=lf
+*.ps1       text eol=lf
+
+# Windows batch files keep CRLF for convenience
+*.bat       text eol=crlf
+
+# Treat binary assets as binary (no line-ending changes)
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary
+*.zip       binary
+*.gz        binary
+*.7z        binary

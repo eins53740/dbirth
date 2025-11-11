@@ -1,0 +1,27 @@
+```mermaid
+sequenceDiagram
+    autonumber
+    %% Actors
+    participant Edge as Edge Gateway
+    participant MQTT as EMQX Broker
+    participant SVC as Metadata Sync Service
+    participant PG as PostgreSQL (schema: uns_meta)
+    participant CDC as CDC Publication (uns_meta_pub)
+    participant Canary as Canary Write API
+
+    %% Sequence
+    Edge->>MQTT: Publish <DBIRTH> frame
+    MQTT->>SVC: Deliver DBIRTH payload
+    SVC->>SVC: Decode Sparkplug metrics + properties
+    SVC->>SVC: Normalize UNS paths & derive Canary tag IDs
+    SVC->>PG: Upsert devices, metrics, metric_properties
+    SVC->>PG: Append metric_versions diff (append-only)
+    PG-->>CDC: Stream logical replication (pgoutput)
+    CDC->>SVC: Debounced diff batches (property-level)
+    Note over CDC,SVC: Debounce ≈ 3 min after refresh, Collapse bursts, drop unchanged fields
+    SVC->>Canary: POST /api/v2/storeTagData (properties-only delta)
+    Canary-->>SVC: 200 OK / error → metrics + alerts
+
+    %% Operational guardrails
+    Note over SVC,Canary: Rate limit ≤ 500 rps · Retries (exp backoff + jitter) · Circuit breaker
+```

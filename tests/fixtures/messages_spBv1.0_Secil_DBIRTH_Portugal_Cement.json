@@ -1,0 +1,141 @@
+{
+  "timestamp": "1756392554816",
+  "seq": "1",
+  "metrics": [
+    {
+      "name": "Maceira/400 - Clinker Production/451 - Bypass/Normalised/Indications/BYPVT603INT02/Active",
+      "timestamp": "1756392554609",
+      "datatype": 11,
+      "isNull": false,
+      "metadata": {
+        "isMultiPart": false,
+        "contentType": "",
+        "size": "0",
+        "seq": "0",
+        "fileName": "",
+        "fileType": "",
+        "md5": "",
+        "description": ""
+      },
+      "properties": {
+        "keys": [
+          "engLow",
+          "retained",
+          "DataPermission",
+          "Quality",
+          "documentation",
+          "engHigh",
+          "retain",
+          "executionMode",
+          "engUnit",
+          "delete"
+        ],
+        "values": [
+          { "type": 10, "doubleValue": 0.0 },
+          { "type": 11, "booleanValue": true },
+          { "type": 12, "stringValue": "user_domainSecil(R);G_UNS_Admin(RW)" },
+          { "type": 3, "intValue": 2147484164 },
+          { "type": 12, "stringValue": "SA: - Active" },
+          { "type": 10, "doubleValue": 0.0 },
+          { "type": 11, "booleanValue": true },
+          { "type": 3, "intValue": 1 },
+          { "type": 12, "stringValue": "" },
+          { "type": 11, "booleanValue": false }
+        ]
+      },
+      "booleanValue": true
+    },
+    {
+      "name": "Maceira/400 - Clinker Production/432 - Kiln/Normalised/Machines/FO6RGH32M1/Closed",
+      "timestamp": "1756392554609",
+      "datatype": 11,
+      "isNull": false,
+      "metadata": {
+        "isMultiPart": false,
+        "contentType": "",
+        "size": "0",
+        "seq": "0",
+        "fileName": "",
+        "fileType": "",
+        "md5": "",
+        "description": ""
+      },
+      "properties": {
+        "keys": [
+          "engLow",
+          "retained",
+          "DataPermission",
+          "Quality",
+          "documentation",
+          "engHigh",
+          "retain",
+          "executionMode",
+          "engUnit",
+          "delete"
+        ],
+        "values": [
+          { "type": 10, "doubleValue": 0.0 },
+          { "type": 11, "booleanValue": true },
+          { "type": 12, "stringValue": "user_domainSecil(R);G_UNS_Admin(RW)" },
+          { "type": 3, "intValue": 192 },
+          {
+            "type": 12,
+            "stringValue": "Valvula doseadora H32.1 extraccao SHI2 para caleira H57 - Closed/Position2"
+          },
+          { "type": 10, "doubleValue": 0.0 },
+          { "type": 11, "booleanValue": true },
+          { "type": 3, "intValue": 1 },
+          { "type": 12, "stringValue": "" },
+          { "type": 11, "booleanValue": false }
+        ]
+      },
+      "booleanValue": false
+    },
+    {
+      "name": "Maceira/600 - Cement Packaging and Dispatch/671 - Bag Conveying/Normalised/Selections/EMBSILO23SEL01_FS/Selected",
+      "timestamp": "1756392554609",
+      "datatype": 11,
+      "isNull": false,
+      "metadata": {
+        "isMultiPart": false,
+        "contentType": "",
+        "size": "0",
+        "seq": "0",
+        "fileName": "",
+        "fileType": "",
+        "md5": "",
+        "description": ""
+      },
+      "properties": {
+        "keys": [
+          "engLow",
+          "retained",
+          "DataPermission",
+          "Quality",
+          "documentation",
+          "engHigh",
+          "retain",
+          "executionMode",
+          "engUnit",
+          "delete"
+        ],
+        "values": [
+          { "type": 10, "doubleValue": 0.0 },
+          { "type": 11, "booleanValue": true },
+          { "type": 12, "stringValue": "user_domainSecil(R);G_UNS_Admin(RW)" },
+          { "type": 3, "intValue": 2147484164 },
+          {
+            "type": 12,
+            "stringValue": "EXT SILO 23 - FORA SERVIÇO - Selected"
+          },
+          { "type": 10, "doubleValue": 0.0 },
+          { "type": 11, "booleanValue": true },
+          { "type": 3, "intValue": 1 },
+          { "type": 12, "stringValue": "" },
+          { "type": 11, "booleanValue": false }
+        ]
+      },
+      "booleanValue": false
+    }
+  ]
+}

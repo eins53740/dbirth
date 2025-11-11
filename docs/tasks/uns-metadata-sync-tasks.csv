@@ -1,0 +1,931 @@
+"Task ID","Summary","Issue Type","Parent ID","Priority","Story Points","Labels","Description","Acceptance Criteria"
+"TBD-EP-01-UT-01","Build MQTT DBIRTH subscription regression harness","Task","EP-01","High","3","uns-meta, ep01, unit-test","- **Background**: Current MQTT client lacks automated regression coverage for clean session reconnects and QoS 0 duplicate delivery guarantees described in the design doc.
+  - **In Scope**:
+    - Create unit-level tests that simulate EMQX session drops, clean session reconnects, and topic re-subscription to spBv1.0/Secil/DBIRTH/#.
+    - Assert watchdog callbacks fire within configured timeout when the subscription lags.
+    - Cover duplicate DBIRTH delivery handling at the client layer before handing off to downstream processing.
+  - **Out of Scope**:
+    - Network integration with live EMQX brokers.
+    - REBIRTH publish workflows (handled in EP-02).
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (MQTT ingest section)
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-10, TC-11)","Tests reproduce session drop and verify reconnect logic resubscribes before timeout.
+Duplicate message fixtures do not increment downstream handoff counter.
+Watchdog metric assertions cover success and failure paths."
+"TBD-EP-01-UT-02","Validate TLS bootstrap and credential rotation helpers","Task","EP-01","High","2","uns-meta, ep01, unit-test","- **Background**: TLS configuration code must enforce TLS 1.3 ciphers and allow credential hot reload without restarts.
+  - **In Scope**:
+    - Add tests covering .env credential reload events and certificate parsing failures.
+    - Confirm TLS context builder rejects protocols weaker than TLS 1.3 and logs actionable errors.
+    - Verify secrets remain redacted in error messages per security guidelines.
+  - **Out of Scope**:
+    - mTLS handshake logic (future roadmap).
+  - **References**:
+    - docs/epics/EP-07 - Security & Configuration (TLS, Secrets).md
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (SEC-01)","Tests fail if TLS context allows TLS 1.2 or weaker.
+Reloaded credentials take effect without process restart in unit harness.
+Secret strings never appear in test log captures."
+"TBD-EP-01-UT-03","Exercise MQTT retry and backoff utilities","Task","EP-01","Medium","2","uns-meta, ep01, unit-test","- **Background**: Retry helpers wrap MQTT connect attempts but lack assertions for jitter and cap logic.
+  - **In Scope**:
+    - Unit tests covering exponential backoff with jitter (0.5s seed, max 30s) and ensuring cap after configured attempts.
+    - Validate retry hooks emit Prometheus metrics for successes and failures (per EP-08 observability expectations).
+    - Simulate permanent failure to confirm helper surfaces terminal error.
+  - **Out of Scope**:
+    - Integration with global circuit breaker (EP-06).
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Resiliency patterns)
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-11)","Retry delay sequence matches design tolerances including jitter distribution bounds.
+Metrics counters increment per attempt and final outcome.
+Terminal failures bubble explicit error for caller handling."
+"TBD-EP-01-IT-01","Prove MQTT ingest to Postgres write path","Task","EP-01","High","5","uns-meta, ep01, integration-test","- **Background**: Need an automated integration suite that drives DBIRTH fixtures through the message handler into the staging Postgres instance.
+  - **In Scope**:
+    - Spin up EMQX test container with TLS enabled and load DBIRTH fixtures from ixtures/mqtt/dbirth.
+    - Assert device and metric rows persist with normalized keys stubbed by EP-03 tasks.
+    - Validate duplicate DBIRTH frames do not create extra rows by re-running ingest scenario.
+  - **Out of Scope**:
+    - Canary API calls or CDC emissions.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-10, DI-01)
+    - docs/Metada Sync Microservice - PostgreSQL Schema & ERD (Release 1.0).md (devices, metrics tables)","Integration harness provisions EMQX and Postgres containers with seeded certs.
+After ingest, tables contain expected rows matching fixture assertions.
+Re-ingest of same payload results in zero additional inserts per audit query."
+"TBD-EP-01-IT-02","Validate DB write error handling path","Task","EP-01","Medium","3","uns-meta, ep01, integration-test","- **Background**: Integration coverage required for error fan-out when Postgres rejects writes (e.g., TLS drop, constraint violation).
+  - **In Scope**:
+    - Inject transient TLS failure to ensure retry/backoff handles reconnect without data loss.
+    - Force constraint violation using malformed payload and confirm message gets routed to DLQ or error metric.
+    - Capture structured logs that include correlation id and failure reason.
+  - **Out of Scope**:
+    - Canary retry pipeline interactions.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Error handling)
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (DI-01, OBS-02)","Test harness exposes toggle for TLS interruption and verifies automatic recovery.
+Constraint violation scenario triggers documented DLQ/error metric behavior.
+Logs contain correlation ids and redacted secrets per security guidelines."
+"TBD-EP-01-CT-01","Document EMQX broker contract baseline","Task","EP-01","Medium","2","uns-meta, ep01, contract-test","- **Background**: Need explicit contract tests around EMQX connection parameters, TLS negotiation, and topic filters to freeze expectations.
+  - **In Scope**:
+    - Capture broker capabilities (protocol, session flags, QoS support) using mocked handshake.
+    - Produce failing test when server advertises unsupported cipher suite or mismatched topic regex.
+    - Generate Markdown report consumed by ops runbook.
+  - **Out of Scope**:
+    - Payload decode (owned by EP-02).
+  - **References**:
+    - docs/epics/EP-07 - Security & Configuration (TLS, Secrets).md
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (SEC-01)","Contract test fixture asserts TLS negotiation uses documented cipher suites.
+Topic filters verified against spBv1.0/Secil/DBIRTH/# pattern with regression coverage.
+Generated report stored under docs/contracts/emqx.md and referenced in runbooks."
+"TBD-EP-01-IMP-01","Refactor MQTT client for injectable dependencies","Task","EP-01","High","5","uns-meta, ep01, implementation","- **Background**: To enable unit and integration tests, the MQTT client must support dependency injection for transport, timers, and metrics.
+  - **In Scope**:
+    - Extract interfaces for transport, logger, and metrics recorder.
+    - Add configuration struct validated via .env loader.
+    - Ensure reconnection and duplicate suppression logic rely on injected components to ease mocking.
+  - **Out of Scope**:
+    - Circuit breaker integration (EP-06).
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (MQTT client architecture)","New interfaces allow tests to stub transport and timers.
+Configuration validation rejects missing endpoints or certs with actionable error.
+Existing integration smoke test passes with new structure."
+"TBD-EP-01-IMP-02","Implement connectivity watchdog metrics","Task","EP-01","Medium","3","uns-meta, ep01, implementation","- **Background**: Observability requirements call for watchdog timers and structured logs when connectivity drifts.
+  - **In Scope**:
+    - Emit Prometheus gauges for mqtt_connected and counters for reconnect attempts.
+    - Add structured log entries with correlation id, broker url, and TLS fingerprint hash.
+    - Wire metrics into existing monitoring registry from EP-08.
+  - **Out of Scope**:
+    - Alert definitions (documented in EP-08 tasks).
+  - **References**:
+    - docs/epics/EP-08 - Observability & Operational Readiness.md","Metrics appear in /metrics endpoint with documented names and labels.
+Logs redact secrets and include context fields per logging spec.
+Watchdog triggers recoveries during integration test scenario."
+"TBD-EP-01-IMP-03","Update runbook for EMQX operations","Task","EP-01","Medium","1","uns-meta, ep01, documentation","- **Background**: Operational docs must capture new tests, metrics, and failure handling.
+  - **In Scope**:
+    - Document startup checklist, TLS certificate rotation steps, and retry tuning knobs.
+    - Add troubleshooting matrix referencing new contract and integration tests.
+    - Link to generated contract report and test fixtures.
+  - **Out of Scope**:
+    - Post-incident review templates.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Operations appendix)
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (OBS-02)","Runbook stored under docs/runbooks/emqx.md with table of failure modes vs actions.
+References include latest test IDs and fixture locations.
+Ops review sign-off recorded in project wiki."
+"TBD-EP-02-UT-01","Expand Sparkplug payload decode fixture coverage","Task","EP-02","High","3","uns-meta, ep02, unit-test","- **Background**: Payload decoder must support metrics, dataset values, and property sets per Sparkplug B spec with regression coverage for new fixture variants.
+  - **In Scope**:
+    - Add binary and JSON fixtures for int64, float, boolean, string, and dataset metrics.
+    - Verify decoder preserves property metadata including timestamps and flags.
+    - Assert errors include alias and metric metadata for troubleshooting.
+  - **Out of Scope**:
+    - State support for complex dataset operations beyond read-only decode.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-01, TC-04)
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Payload decode)","Unit tests decode all fixture types without data loss or type mismatch.
+Decoder raises descriptive errors for unsupported datatypes with metric context.
+Fixtures stored under ixtures/sparkplug/dbirth with README."
+"TBD-EP-02-UT-02","Alias cache lookup precedence tests","Task","EP-02","High","2","uns-meta, ep02, unit-test","- **Background**: Alias cache currently assumes device-level map precedence; tests must enforce fallback behavior.
+  - **In Scope**:
+    - Cover lookups with device -> node fallback and fallback to lias:<id>.
+    - Validate cache persistence events triggered on DBIRTH vs control messages.
+    - Ensure REBIRTH throttle increments metrics when alias missing.
+  - **Out of Scope**:
+    - Cache invalidation triggered by CDC diffs (EP-05).
+  - **References**:
+    - docs/epics/EP-02 - Payload Decode & Alias Resolution.md
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-05)","Tests assert device alias overrides node alias.
+Missing alias produces lias:<id> naming without throwing.
+Throttle metrics increment per REBIRTH request issued."
+"TBD-EP-02-UT-03","Property typing validation for decoded metrics","Task","EP-02","Medium","2","uns-meta, ep02, unit-test","- **Background**: Property typing rules defined in schema doc require automated verification to avoid downstream persistence errors.
+  - **In Scope**:
+    - Tests for numeric range enforcement, string length normalization, and UTF-8 sanitizer.
+    - Confirm property map retains units, scale, and metadata flags documented in schema.
+    - Ensure typed properties integrate with identity normalizer (EP-03) without mutation.
+  - **Out of Scope**:
+    - Database persistence (covered in EP-04 integration tests).
+  - **References**:
+    - docs/Metada Sync Microservice - PostgreSQL Schema & ERD (Release 1.0).md (metric_properties)
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-04)","Invalid properties raise structured validation errors referencing offending key.
+Sanitized strings remain within length bounds and preserve significant characters.
+Unit tests prove compatibility with UNS path normalizer API surface."
+"TBD-EP-02-IT-01","Alias resolution end-to-end with MQTT ingest","Task","EP-02","High","5","uns-meta, ep02, integration-test","- **Background**: Need integration coverage to ensure decoded metrics map to canonical names when driven by MQTT ingest harness from EP-01.
+  - **In Scope**:
+    - Reuse EMQX integration rig; inject fixtures with alias/per metric combos.
+    - Confirm alias cache persists to local store and reloads on service restart.
+    - Validate unresolved aliases trigger REBIRTH publisher with throttle guard.
+  - **Out of Scope**:
+    - Postgres write validation (asserted separately in EP-04 tests).
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-05)
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Alias resolution)","Integration run produces deterministic metric names across restarts.
+REBIRTH throttle prevents duplicate requests within configured window.
+Alias persistence verified via cache file/hash snapshot."
+"TBD-EP-02-IT-02","Decoder regression across versioned fixtures","Task","EP-02","Medium","3","uns-meta, ep02, integration-test","- **Background**: Need harness to run multiple historical DBIRTH fixture versions ensuring backward compatibility.
+  - **In Scope**:
+    - Organize fixture catalog by plant/device release.
+    - Run decode pipeline and assert property schema upgrades convert correctly.
+    - Capture golden JSON outputs for diffing in CI.
+  - **Out of Scope**:
+    - Canary API integration.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Fixture strategy)","Versioned fixtures produce expected normalized JSON snapshots.
+Regression harness fails when decoder output deviates from golden snapshots.
+CI job publishes diff artifact for review."
+"TBD-EP-02-CT-01","Sparkplug payload contract verification","Task","EP-02","High","3","uns-meta, ep02, contract-test","- **Background**: Establish formal contract tests verifying decoder compatibility with Sparkplug B spec sections used by project.
+  - **In Scope**:
+    - Encode and decode using reference protobuf definitions, asserting round-trip fidelity.
+    - Validate metric alias, datatype, and property structures from sample edge devices.
+    - Document unsupported features with clear backlog follow-ups.
+  - **Out of Scope**:
+    - Broker-specific transport considerations.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-01)","Contract test suite fails on protobuf schema drift or unsupported datatype introduction.
+Output report stored under docs/contracts/sparkplug_payload.md summarizing coverage.
+Known limitations documented with Jira follow-up links."
+"TBD-EP-02-IMP-01","Modularize payload decoder components","Task","EP-02","High","5","uns-meta, ep02, implementation","- **Background**: Decoder currently monolithic; needs separation for metrics, properties, and alias management for testability.
+  - **In Scope**:
+    - Split decoder into metric extractor, property parser, alias resolver modules.
+    - Provide clear interfaces for injecting fixtures and mocks.
+    - Ensure modules publish structured errors for observability integration.
+  - **Out of Scope**:
+    - Database persistence logic.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Decoder architecture)","Modules expose interfaces consumed by unit/integration tests.
+Error objects include alias, metric name, device context.
+Existing functionality preserved per regression suite."
+"TBD-EP-02-IMP-02","Implement alias cache persistence layer","Task","EP-02","Medium","3","uns-meta, ep02, implementation","- **Background**: Alias cache should persist across restarts using lightweight storage with TTL controls.
+  - **In Scope**:
+    - Choose storage mechanism (sqlite/json) with write-through semantics.
+    - Add TTL and cleanup routine per design doc.
+    - Expose metrics for cache hit ratio.
+  - **Out of Scope**:
+    - Distributed cache synchronization.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Alias cache)","Cache persists between service restarts in local dev environment.
+TTL eviction removes stale entries per configured window.
+Metrics include cache hit/miss counters."
+"TBD-EP-02-IMP-03","Document alias resolution workflow","Task","EP-02","Medium","1","uns-meta, ep02, documentation","- **Background**: Need clarity for operations and developers on alias resolution lifecycle.
+  - **In Scope**:
+    - Create sequence diagram showing decode -> cache lookup -> REBIRTH.
+    - Document configuration flags, throttle settings, and troubleshooting tips.
+    - Link to fixtures and tests introduced in this epic.
+  - **Out of Scope**:
+    - Business-level alias governance.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Appendix)","Documentation stored under docs/runbooks/alias-resolution.md with diagrams.
+Includes mapping of test IDs to features.
+Reviewed by product trio with sign-off notes."
+"TBD-EP-03-UT-01","Canonical UNS path normalization tests","Task","EP-03","High","3","uns-meta, ep03, unit-test","- **Background**: Path normalizer must transform topics and decoded payload context into deterministic device and metric UNS paths.
+  - **In Scope**:
+    - Add table-driven unit tests covering hierarchy variations, missing segments, and illegal characters.
+    - Assert casing normalization, whitespace trimming, and delimiter replacement follow convention.
+    - Validate uns_path results interface correctly with canary id generator.
+  - **Out of Scope**:
+    - Database persistence of paths (covered by EP-04).
+  - **References**:
+    - docs/epics/EP-03 - UNS Path Normalization & Identity Model.md
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-02)","Unit suite covers happy path, missing hierarchy, invalid characters, and overrides.
+Normalizer output matches golden UNS path fixtures stored under ixtures/uns/paths.
+Failures highlight segment-level diff for debugging."
+"TBD-EP-03-UT-02","Identity collision detection tests","Task","EP-03","High","2","uns-meta, ep03, unit-test","- **Background**: Need assurance that distinct inputs never collide to same UNS path or canary id unexpectedly.
+  - **In Scope**:
+    - Generate fuzzed topics/metrics to confirm unique uns_path values per combination.
+    - Validate collision detector raises errors when normalization would result in duplicate keys.
+    - Ensure canonicalization handles international characters by fallback escaping.
+  - **Out of Scope**:
+    - Storage layer conflict handling (EP-04).
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (DI-02)","Fuzz test runs 10k iterations without collision; collisions raise explicit error message.
+Escaping logic produces deterministic replacements for non-ASCII while staying ASCII-only.
+canary_id generation mirrors uns_path segments with dot delimiter."
+"TBD-EP-03-UT-03","Idempotent upsert decision logic tests","Task","EP-03","Medium","3","uns-meta, ep03, unit-test","- **Background**: Upsert planner functions compare normalized identities to persisted snapshots; need deterministic outcomes.
+  - **In Scope**:
+    - Cover scenarios for insert, update, noop decisions based on uns_path and property diffs.
+    - Confirm lineage handoff payload includes previous path when updates triggered.
+    - Assert planner remains idempotent when invoked repeatedly with same input.
+  - **Out of Scope**:
+    - Physical DB writes (EP-04) and CDC emission (EP-05).
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Identity persistence)
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-03)","Decision outputs match expected action enumerations across fixtures.
+Path rename ensures lineage payload contains previous and new paths.
+Re-running planner with identical inputs yields noop decision consistently."
+"TBD-EP-03-UT-04","Diff computation coverage for identity changes","Task","EP-03","Medium","2","uns-meta, ep03, unit-test","- **Background**: Diff generator feeds EP-04 version history; must capture segment-level changes accurately.
+  - **In Scope**:
+    - Unit tests verifying diff outputs for segment additions, removals, and property updates.
+    - Confirm diff payload includes metadata for CDC consumption (timestamp, actor).
+    - Ensure empty diffs returned when only non-material fields change.
+  - **Out of Scope**:
+    - CDC transmission wiring (EP-05).
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-07)","Diff output structured as documented JSON schema with before/after segments.
+Property changes capture old/new values with type metadata.
+No diff entries produced for unchanged inputs."
+"TBD-EP-03-UT-05","Retry helper coverage for identity persistence","Task","EP-03","Medium","1","uns-meta, ep03, unit-test","- **Background**: Identity persistence consumes retry/backoff helpers shared with EP-01; need targeted tests around identity-specific side effects.
+  - **In Scope**:
+    - Validate retries wrap planner execution without duplicating lineage events.
+    - Ensure jitter/backoff config aligns with EP-04 transaction expectations.
+    - Confirm metrics record failure counts labeled by identity segment.
+  - **Out of Scope**:
+    - Transport-level retries (handled elsewhere).
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Resiliency)","Tests assert no duplicate lineage events emitted during retries.
+Backoff schedule remains under 30s aggregate per design.
+Metrics instrumentation validated via test harness."
+"TBD-EP-03-IT-01","Normalized path persistence with Postgres","Task","EP-03","High","5","uns-meta, ep03, integration-test","- **Background**: Integration scenario ensures normalized paths flow from MQTT ingest through decoder into Postgres tables.
+  - **In Scope**:
+    - Combine EP-01 ingest harness and EP-02 decoder to persist rows.
+    - Verify uns_path and canary_id columns populated correctly for devices and metrics.
+    - Execute re-ingest after rename to ensure lineage staging updated.
+  - **Out of Scope**:
+    - CDC or Canary delivery.
+  - **References**:
+    - docs/Metada Sync Microservice - PostgreSQL Schema & ERD (Release 1.0).md (devices, metrics tables)
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (DI-02)","Integration run writes expected rows with deterministic uns_path/canary_id.
+Path rename scenario updates existing row and writes lineage entry.
+Idempotent replays produce no duplicate rows."
+"TBD-EP-03-IT-02","Identity diff handoff to CDC staging","Task","EP-03","Medium","3","uns-meta, ep03, integration-test","- **Background**: Need to confirm diff generator output flows into staging tables consumed by EP-05.
+  - **In Scope**:
+    - Run identity change scenarios and ensure diff JSON stored in staging schema.
+    - Validate ordering semantics for sequential changes on same metric.
+    - Compare diff payload with expected golden JSON for CDC.
+  - **Out of Scope**:
+    - Actual replication slot processing.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Diff pipeline)","Staging tables contain diff payloads matching contract schema.
+Sequence numbers monotonic per metric.
+Golden diff comparison passes for sample fixtures."
+"TBD-EP-03-CT-01","UNS path formatting contract","Task","EP-03","High","2","uns-meta, ep03, contract-test","- **Background**: Establish documented contract for UNS path grammar to coordinate across teams.
+  - **In Scope**:
+    - Define JSON schema representing segment list, allowed characters, and required fields.
+    - Add contract tests to validate normalizer output against schema.
+    - Publish contract doc for consumers including Canary integration team.
+  - **Out of Scope**:
+    - Business-specific naming override negotiations.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (UNS naming)","Contract tests fail when new segment introduced without schema update.
+Schema documented under docs/contracts/uns_path.json with commentary.
+Canary integration team sign-off captured."
+"TBD-EP-03-IMP-01","Implement UNS normalizer module","Task","EP-03","High","5","uns-meta, ep03, implementation","- **Background**: Need production-ready normalizer with clear interfaces for decoder and persistence layers.
+  - **In Scope**:
+    - Build module exposing deterministic device/metric normalization functions.
+    - Include validation utilities returning structured errors with segment context.
+    - Provide configuration hooks for plant-specific overrides.
+  - **Out of Scope**:
+    - Cross-plant reconciliation.
+  - **References**:
+    - docs/epics/EP-03 - UNS Path Normalization & Identity Model.md","Module consumed by decoder and persistence without circular dependencies.
+Validation errors map to HTTP 4xx codes for API consumers (when applicable).
+Benchmarks show normalization under 5ms per metric."
+"TBD-EP-03-IMP-02","Generate canary_id derivation utility","Task","EP-03","Medium","2","uns-meta, ep03, implementation","- **Background**: canary_id needs standalone helper to maintain consistent transformation logic.
+  - **In Scope**:
+    - Implement transformation from uns_path to dot-delimited identifier with escape rules.
+    - Include checksum option for future extension.
+    - Provide unit-level metrics for collisions.
+  - **Out of Scope**:
+    - Canary API invocation.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (DI-02)","Helper passes all unit tests and returns deterministic IDs.
+Escaping rules documented and logged when triggered.
+Collision counter increments when duplicates attempted."
+"TBD-EP-03-IMP-03","Document identity model lifecycle","Task","EP-03","Medium","1","uns-meta, ep03, documentation","- **Background**: Provide cohesive documentation across ingest, normalization, persistence, and CDC for identities.
+  - **In Scope**:
+    - Author markdown doc describing flow with sequence diagram.
+    - Link to tests, schema, and contract artifacts.
+    - Add troubleshooting cheatsheet for path conflicts.
+  - **Out of Scope**:
+    - Canary-specific mapping details (EP-06).
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md","Doc stored under docs/runbooks/identity-lifecycle.md.
+Sequence diagram checked into docs/diagrams with source file.
+Reviewed by data governance lead."
+"TBD-EP-04-UT-01","Repository upsert logic tests","Task","EP-04","High","3","uns-meta, ep04, unit-test","- **Background**: Device and metric repositories perform conditional upserts; unit coverage required for idempotency and constraint handling.
+  - **In Scope**:
+    - Mock database layer to simulate constraint violations and ensure retry strategy aligns with EP-03 planner decisions.
+    - Verify `updated_at` timestamps change only on actual updates.
+    - Ensure lineage handoff invoked when `uns_path` differs.
+  - **Out of Scope**:
+    - Live database interactions.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-03, DI-01)","Upsert logic returns deterministic results for insert/update/noop.
+Constraint violations bubble descriptive errors with context ids.
+Timestamp behavior matches design expectations."
+"TBD-EP-04-UT-02","Metric property typing enforcement tests","Task","EP-04","High","2","uns-meta, ep04, unit-test","- **Background**: Property persistence code must enforce enum/check constraints before hitting DB.
+  - **In Scope**:
+    - Validate property mapper enforces allowed types and length constraints.
+    - Assert numeric properties respect precision/scale definitions.
+    - Ensure sanitization does not strip critical metadata.
+  - **Out of Scope**:
+    - Decoder-level validation (EP-02).
+  - **References**:
+    - docs/Metada Sync Microservice - PostgreSQL Schema & ERD (Release 1.0).md (`metric_properties`)","Invalid types raise pre-check errors with offending field names.
+Valid inputs pass through unchanged and align with schema definitions.
+Unit tests cover nested propertyset flattening."
+"TBD-EP-04-UT-03","Trigger and constraint unit coverage","Task","EP-04","Medium","2","uns-meta, ep04, unit-test","- **Background**: Database triggers for `updated_at`, lineage, and versioning need logic tests via migration harness.
+  - **In Scope**:
+    - Use plpgsql unit testing framework (pgTAP) to validate trigger behavior.
+    - Cover cases for path rename and property updates.
+    - Assert constraints prevent duplicates and invalid enums.
+  - **Out of Scope**:
+    - Performance benchmarking.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (DI-03, DI-04)","pgTAP suite passes for triggers and constraints.
+Violations produce descriptive messages documented for troubleshooting.
+Trigger logic idempotent on repeated updates."
+"TBD-EP-04-IT-01","End-to-end persistence with migrations","Task","EP-04","High","5","uns-meta, ep04, integration-test","- **Background**: Need integration workflow that applies migrations, ingests sample payloads, and verifies DB state.
+  - **In Scope**:
+    - Automate database provisioning with TLS.
+    - Run migration scripts and assert expected schema objects exist.
+    - Drive sample data through repository layer verifying lineage/version tables.
+  - **Out of Scope**:
+    - CDC consumer.
+  - **References**:
+    - docs/Metada Sync Microservice - PostgreSQL Schema & ERD (Release 1.0).md
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (DI-03)","Integration job provisions Postgres 16 container with TLS verify-full.
+Schema matches ERD (tables, constraints, indexes).
+Sample ingest yields expected rows in devices, metrics, metric_properties, lineage, version tables."
+"TBD-EP-04-IT-02","Failure handling and rollback integration tests","Task","EP-04","Medium","3","uns-meta, ep04, integration-test","- **Background**: Validate transactions roll back on partial failures, ensuring no inconsistent state.
+  - **In Scope**:
+    - Simulate property write failure mid-transaction.
+    - Confirm identity tables revert and emit error metrics/logs.
+    - Ensure retry logic replays successful on second attempt.
+  - **Out of Scope**:
+    - Upstream MQTT interactions.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Transactional integrity)","Partial failure leaves database unchanged and logs structured error.
+Retry attempt succeeds and audit trail reflects single update.
+Metrics capture rollback event for observability."
+"TBD-EP-04-CT-01","Database schema contract verification","Task","EP-04","High","2","uns-meta, ep04, contract-test","- **Background**: Publish schema contract to detect drift and communicate to downstream consumers.
+  - **In Scope**:
+    - Generate schema diff pipeline comparing migrations with ERD baseline.
+    - Export schema metadata to JSON for CDC/analytics consumers.
+    - Add contract tests in CI to block unreviewed schema changes.
+  - **Out of Scope**:
+    - Performance-focused schema analysis.
+  - **References**:
+    - docs/Metada Sync Microservice - PostgreSQL Schema & ERD (Release 1.0).md","Contract diff fails when unauthorized schema change detected.
+Schema metadata stored under `docs/contracts/postgres_schema.json`.
+CI includes step referencing contract report artifact."
+"TBD-EP-04-IMP-01","Author database migrations for release 1.0","Task","EP-04","High","5","uns-meta, ep04, implementation","- **Background**: Need production-ready SQL migrations aligning with schema doc.
+  - **In Scope**:
+    - Implement tables, indexes, constraints, triggers per ERD.
+    - Provide rollback scripts and migration verification checklist.
+    - Integrate migrations with CI pipeline.
+  - **Out of Scope**:
+    - Data seeding beyond lookup tables.
+  - **References**:
+    - docs/Metada Sync Microservice - PostgreSQL Schema & ERD (Release 1.0).md","Migrations apply cleanly on fresh database.
+Rollback scripts verified in staging env.
+CI pipeline runs migration validation job."
+"TBD-EP-04-IMP-02","Implement lineage and versioning writers","Task","EP-04","Medium","3","uns-meta, ep04, implementation","- **Background**: Need application layer components to persist lineage and property version diffs.
+  - **In Scope**:
+    - Build writer functions receiving diff payloads from EP-03.
+    - Ensure transactionally consistent writes across lineage/version tables.
+    - Emit metrics for lineage entries created.
+  - **Out of Scope**:
+    - CDC broadcasting.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Lineage & version history)","Writers handle insert/update scenarios without duplication.
+Metrics counters increment per diff applied.
+Integration tests confirm data integrity."
+"TBD-EP-04-IMP-03","Document database maintenance playbook","Task","EP-04","Medium","1","uns-meta, ep04, documentation","- **Background**: Ops needs guidance for backups, vacuum, and TLS key rotation.
+  - **In Scope**:
+    - Write maintenance checklist referencing TLS requirements and user roles.
+    - Include SQL snippets for validating constraints and indexes.
+    - Document troubleshooting flow for common errors.
+  - **Out of Scope**:
+    - Disaster recovery design.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Operations)","Playbook published at `docs/runbooks/postgres-maintenance.md`.
+Includes linkage to schema contract artifacts.
+Reviewed by DBA stakeholder."
+"TBD-EP-05-UT-01","Logical replication client unit tests","Task","EP-05","High","3","uns-meta, ep05, unit-test","- **Background**: CDC client must parse `pgoutput` messages and handle reconnects cleanly.
+  - **In Scope**:
+    - Mock replication stream delivering insert/update/delete combos.
+    - Assert slot position tracking persists across reconnect scenarios.
+    - Ensure error handling retries with exponential backoff and surfaces terminal failures.
+  - **Out of Scope**:
+    - Network integration with live Postgres.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-15)","Unit tests assert correct decoding of relation and column metadata.
+Slot position checkpoints saved and restored accurately.
+Backoff parameters conform to resiliency guidelines."
+"TBD-EP-05-UT-02","Debounce buffer behavior tests","Task","EP-05","High","2","uns-meta, ep05, unit-test","- **Background**: Debounce logic must aggregate metric diffs within 3-minute window without memory leaks.
+  - **In Scope**:
+    - Cover add/update operations within window and ensure single emission.
+    - Test buffer eviction after window expiry and on overload cap.
+    - Validate metrics expose buffer depth and drops.
+  - **Out of Scope**:
+    - Actual Canary delivery.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-16)","Buffered events collapse into minimal diff payload after window.
+Buffer cap triggers drop metrics and warning logs.
+Memory footprint remains bounded in unit simulation."
+"TBD-EP-05-UT-03","Diff computation integrity tests","Task","EP-05","Medium","2","uns-meta, ep05, unit-test","- **Background**: Diff merger must respect order and include version metadata from EP-03/04 outputs.
+  - **In Scope**:
+    - Validate diff aggregator merges device and metric property changes correctly.
+    - Ensure diff payload includes version numbers and actor metadata.
+    - Confirm idempotent replays produce identical diff outputs.
+  - **Out of Scope**:
+    - Storage of diffs (handled by EP-04).
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (CDC diffing)","Unit tests compare generated diffs against golden snapshots.
+Version ordering preserved for sequential updates.
+Duplicate events yield no duplicate diff emissions."
+"TBD-EP-05-IT-01","DB writes to CDC consumer pipeline test","Task","EP-05","High","5","uns-meta, ep05, integration-test","- **Background**: Validate real logical replication stream from Postgres to CDC consumer in dockerized environment.
+  - **In Scope**:
+    - Provision Postgres with publication `uns_meta_pub` and seed sample updates.
+    - Connect CDC consumer and confirm diffs emitted to in-memory queue.
+    - Measure latency and ensure within design targets (<10s post debounce).
+  - **Out of Scope**:
+    - Canary API integration.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (DI-04, TC-17)","Integration test spins up replication slot and processes events end-to-end.
+Debounce window respected; metrics emitted for latency.
+Pipeline resilient to transient disconnect (auto reconnect proven)."
+"TBD-EP-05-IT-02","Stress test debounce under burst load","Task","EP-05","Medium","3","uns-meta, ep05, integration-test","- **Background**: Need assurance debounce window handles high-frequency updates without backlog.
+  - **In Scope**:
+    - Replay synthetic workload with 1k updates per minute on single metric.
+    - Confirm throughput and memory metrics meet targets.
+    - Capture CPU usage and provide tuning recommendations.
+  - **Out of Scope**:
+    - Canary throughput tests.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Performance goals)","Stress run completes without OOM and within acceptable latency.
+Metrics confirm buffer cap not exceeded under configured load.
+Report generated with tuning guidance."
+"TBD-EP-05-CT-01","CDC diff payload contract","Task","EP-05","High","2","uns-meta, ep05, contract-test","- **Background**: Downstream Canary integration requires stable diff schema.
+  - **In Scope**:
+    - Define JSON schema for diff payload including debounce metadata.
+    - Validate integration tests emit payload matching schema.
+    - Publish schema for consumers and version it.
+  - **Out of Scope**:
+    - Canary-specific fields beyond diff.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-17)","Contract tests fail on schema drift.
+Schema stored under `docs/contracts/cdc_diff.json` with changelog.
+Communication sent to Canary team about schema availability."
+"TBD-EP-05-IMP-01","Build CDC listener service","Task","EP-05","High","5","uns-meta, ep05, implementation","- **Background**: Implement production service that connects to replication slot and emits debounced diffs.
+  - **In Scope**:
+    - Implement replication connection management, slot creation, and heartbeats.
+    - Integrate debounce buffer and diff generator.
+    - Expose metrics for lag, buffer depth, and error counts.
+  - **Out of Scope**:
+    - Canary delivery.
+  - **References**:
+    - docs/epics/EP-05 - CDC Diff Listener with Debounce.md","Service handles reconnects without losing position.
+Metrics appear in observability stack with documented names.
+Integration tests pass end-to-end."
+"TBD-EP-05-IMP-02","Implement persistence for resume tokens","Task","EP-05","Medium","2","uns-meta, ep05, implementation","- **Background**: Resume tokens ensure CDC restarts continue without duplication.
+  - **In Scope**:
+    - Store slot positions in durable store with atomic updates.
+    - Provide API for manual reset with safeguards.
+    - Add smoke test verifying resume after restart.
+  - **Out of Scope**:
+    - Multi-instance coordination.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (CDC resiliency)","Resume tokens persist across restarts and remain consistent.
+Manual reset endpoint documented and secured.
+Smoke test demonstrates restart reliability."
+"TBD-EP-05-IMP-03","Debounce configuration documentation","Task","EP-05","Medium","1","uns-meta, ep05, documentation","- **Background**: Operators need clarity on tuning debounce window and buffer caps.
+  - **In Scope**:
+    - Document configuration parameters, defaults, and recommended values.
+    - Provide troubleshooting guidance for lag or backlog scenarios.
+    - Reference metrics and alert thresholds.
+  - **Out of Scope**:
+    - Full SRE runbook for Canary integration.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Operations)","Documentation stored at `docs/runbooks/cdc-debounce.md`.
+Includes table of configs vs symptoms.
+Reviewed by ops lead."
+"TBD-EP-06-UT-01","Canary payload mapper unit tests","Task","EP-06","High","3","uns-meta, ep06, unit-test","- **Background**: Mapper converts internal diff model into Canary API payload; requires thorough coverage.
+  - **In Scope**:
+    - Validate mapping of device/metric fields, canary_id, and properties.
+    - Ensure optional fields handled per API contract.
+    - Confirm payload size limits enforced with meaningful errors.
+  - **Out of Scope**:
+    - HTTP transport concerns.
+  - **References**:
+    - docs/epics/EP-06 - Canary Write API Integration (Rate Limit, Retries).md
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-20)","Unit tests cover happy path and edge cases (missing optional fields, large property sets).
+Payload output aligns with documented JSON examples.
+Errors reference metric identity for debugging."
+"TBD-EP-06-UT-02","Rate limiter and queue behavior tests","Task","EP-06","High","2","uns-meta, ep06, unit-test","- **Background**: Need deterministic tests verifying 500 rps token bucket and queue backpressure.
+  - **In Scope**:
+    - Simulate burst load and ensure limiter enforces ceiling.
+    - Validate drop/timeout behavior when queue full.
+    - Confirm metrics reflect queue depth and throttle events.
+  - **Out of Scope**:
+    - External monitoring configuration (EP-08).
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-21)","Tests assert no more than 500 requests dispatched per second.
+Queue overflow triggers configured backpressure response.
+Metrics counters increment for throttled events."
+"TBD-EP-06-UT-03","Retry and circuit breaker logic tests","Task","EP-06","Medium","3","uns-meta, ep06, unit-test","- **Background**: Reliable delivery hinges on correct retry with jitter and circuit breaker transitions.
+  - **In Scope**:
+    - Unit tests simulating transient failures, respect for exponential backoff with jitter.
+    - Verify circuit transitions closed -> open -> half-open -> closed.
+    - Ensure dead-letter callback triggered after max retries.
+  - **Out of Scope**:
+    - Actual HTTP call integration.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-22)","Retry schedule matches documentation (6 attempts, capped delay).
+Circuit breaker state and metrics update correctly.
+Dead-letter handler invoked with detailed failure context."
+"TBD-EP-06-IT-01","CDC consumer to Canary client integration","Task","EP-06","High","5","uns-meta, ep06, integration-test","- **Background**: Need end-to-end validation from CDC diff queue to Canary API mock.
+  - **In Scope**:
+    - Feed debounced diffs from EP-05 harness into client.
+    - Mock Canary API with controllable latency and failure modes.
+    - Measure throughput, success rates, and retried deliveries.
+  - **Out of Scope**:
+    - Production Canary endpoint.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (DI-05)","Integration test demonstrates successful delivery under normal conditions.
+Failure scenarios trigger retries and eventual success or DLQ per design.
+Metrics/logs captured for rate limiting and circuit state."
+"TBD-EP-06-IT-02","Rate limit soak test","Task","EP-06","Medium","3","uns-meta, ep06, integration-test","- **Background**: Validate sustained throughput at 450 rps without breaching Canary cap.
+  - **In Scope**:
+    - Drive workload for 15 minutes using synthetic diffs.
+    - Monitor limiter metrics, queue depth, and CPU usage.
+    - Produce report summarizing headroom and recommendations.
+  - **Out of Scope**:
+    - Production performance testing.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Performance budgets)","Soak test shows zero 429 responses and stable queue depth.
+Report stored under `docs/reports/canary-rate-limit.md`.
+Recommendations included for scaling."
+"TBD-EP-06-CT-01","Canary API contract verification","Task","EP-06","High","2","uns-meta, ep06, contract-test","- **Background**: Formalize contract with Canary `POST /api/v2/storeTagData` endpoint.
+  - **In Scope**:
+    - Generate OpenAPI snippet representing request/response.
+    - Use Pact or similar framework to assert compatibility against mock server.
+    - Document required headers, auth tokens, and error payloads.
+  - **Out of Scope**:
+    - Canary read APIs.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (TC-20)","Contract tests fail on breaking change from Canary team.
+OpenAPI fragment stored in `docs/contracts/canary_storeTagData.yaml`.
+Change management process documented for contract updates."
+"TBD-EP-06-IMP-01","Implement Canary client with rate limiter","Task","EP-06","High","5","uns-meta, ep06, implementation","- **Background**: Need production client that respects rate limits and integrates retries.
+  - **In Scope**:
+    - Build HTTP client with timeout, auth token management, and structured logging.
+    - Integrate token bucket limiter and bounded queue.
+    - Emit metrics for requests, retries, failures, and circuit state.
+  - **Out of Scope**:
+    - Bulk sync workflows.
+  - **References**:
+    - docs/epics/EP-06 - Canary Write API Integration (Rate Limit, Retries).md","Client meets rate limit guarantees and passes integration tests.
+Metrics integrated into observability stack.
+Configuration via `.env` validated at startup."
+"TBD-EP-06-IMP-02","Implement DLQ/backoff policy","Task","EP-06","Medium","3","uns-meta, ep06, implementation","- **Background**: Ensure unresolvable failures captured without data loss.
+  - **In Scope**:
+    - Add dead-letter queue storage (Postgres table or object storage) with retention policy.
+    - Provide admin tooling for replay.
+    - Document escalation procedure when DLQ growth detected.
+  - **Out of Scope**:
+    - Automated replay scheduling.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Error handling)","DLQ entries include payload, error metadata, and retry count.
+Replay tooling validated via integration test.
+Alerts configured for DLQ threshold (ties into EP-08)."
+"TBD-EP-06-IMP-03","Write Canary integration runbook","Task","EP-06","Medium","1","uns-meta, ep06, documentation","- **Background**: Ops needs documented steps for auth rotation, rate limit tuning, and incident response.
+  - **In Scope**:
+    - Document auth token management, rotation checklist, and fallback.
+    - Capture common failure codes with remediation steps.
+    - Link to contract tests and integration harness instructions.
+  - **Out of Scope**:
+    - Canary-side runbooks.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Operations)","Runbook stored at `docs/runbooks/canary-integration.md`.
+Includes table of failure codes vs actions.
+Reviewed by Canary integration stakeholders."
+"TBD-EP-07-UT-01","Configuration loader validation tests","Task","EP-07","High","2","uns-meta, ep07, unit-test","- **Background**: Config loader must enforce required env vars, defaults, and secret masking.
+  - **In Scope**:
+    - Tests covering missing env vars, invalid formats, and fallback defaults.
+    - Ensure secrets flagged for masking never appear in error strings.
+    - Validate config snapshot exported for observability excludes sensitive fields.
+  - **Out of Scope**:
+    - Dynamic reload (EP-01 covers for MQTT credentials).
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (SEC-02)","Loader raises descriptive errors for missing/invalid configs.
+Snapshot redacts secrets while retaining non-sensitive fields.
+Unit tests cover both success and failure paths."
+"TBD-EP-07-UT-02","TLS trust store and certificate management tests","Task","EP-07","High","3","uns-meta, ep07, unit-test","- **Background**: TLS helper must load trust stores, validate cert expiration, and enforce TLS 1.3.
+  - **In Scope**:
+    - Mock trust store loading with rotated certs.
+    - Assert helper rejects expired or mismatched host certs.
+    - Verify cipher suites limited to approved list.
+  - **Out of Scope**:
+    - mTLS client certificates.
+  - **References**:
+    - docs/epics/EP-07 - Security & Configuration (TLS, Secrets).md","Tests fail if TLS version lower than 1.3 permitted.
+Expired or mismatched certificates raise actionable errors.
+Metrics/logging capture rotation events without secrets."
+"TBD-EP-07-UT-03","Secret handling regression tests","Task","EP-07","Medium","2","uns-meta, ep07, unit-test","- **Background**: Need to ensure secrets never leak to logs or panic traces.
+  - **In Scope**:
+    - Introduce fuzz tests to ensure logging sanitizer removes sensitive patterns.
+    - Validate panic handler scrubs secrets before writing crash dumps.
+    - Confirm metrics avoid labeling with secret values.
+  - **Out of Scope**:
+    - External log aggregation.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (SEC-03)","Log output and crash reports contain redacted placeholders.
+sanitizer handles unicode and binary secrets without failure.
+Tests trigger warnings if new logging paths bypass sanitizer."
+"TBD-EP-07-IT-01","TLS end-to-end verification for EMQX and Postgres","Task","EP-07","High","4","uns-meta, ep07, integration-test","- **Background**: Validate service enforces TLS connections to both EMQX and Postgres in a realistic environment.
+  - **In Scope**:
+    - Launch docker compose with EMQX and Postgres using TLS certs.
+    - Confirm clients reject self-signed certs unless trust override set.
+    - Capture observability metrics/logs for handshake success/failure.
+  - **Out of Scope**:
+    - Canary TLS integration.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (SEC-01)","Integration fails when TLS disabled, succeeding when enabled with proper trust.
+Logs/metrics capture handshake outcomes.
+CI job runs integration test in nightly pipeline."
+"TBD-EP-07-IT-02","Permission boundary integration test","Task","EP-07","Medium","3","uns-meta, ep07, integration-test","- **Background**: Ensure database users `uns_meta_app` and `uns_meta_cdc` have least privilege.
+  - **In Scope**:
+    - Attempt restricted operations (DDL, admin functions) and confirm denied.
+    - Verify necessary permissions (select/insert/update) function.
+    - Document results for audit.
+  - **Out of Scope**:
+    - Broader RBAC review.
+  - **References**:
+    - docs/epics/EP-07 - Security & Configuration (TLS, Secrets).md","Unauthorized operations fail with permission errors.
+Authorized operations succeed for normal workflow.
+Audit log stored in `docs/reports/db-permissions.md`."
+"TBD-EP-07-CT-01","Security posture contract report","Task","EP-07","High","2","uns-meta, ep07, contract-test","- **Background**: Provide consumable report enumerating required TLS versions, cipher suites, and secret storage expectations.
+  - **In Scope**:
+    - Generate markdown report from automated checks.
+    - Version the report and track approval in security wiki.
+    - Include checklist referencing SEC test cases.
+  - **Out of Scope**:
+    - Penetration testing results.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (SEC-01/02/03)","Report generated automatically and stored at `docs/contracts/security_posture.md`.
+Any deviation from approved configuration fails CI.
+Security lead sign-off recorded."
+"TBD-EP-07-IMP-01","Harden configuration management module","Task","EP-07","High","4","uns-meta, ep07, implementation","- **Background**: Need robust config loader with validation, defaults, and secret masking.
+  - **In Scope**:
+    - Implement typed config structs with validation methods.
+    - Integrate with vault or env sourcing as defined.
+    - Provide runtime reload hooks where needed.
+  - **Out of Scope**:
+    - UI for config edits.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Configuration)","Module passes unit/integration tests and plugs into services.
+Secrets masked in logs and metrics.
+Invalid config prevents startup with clear error."
+"TBD-EP-07-IMP-02","Implement TLS asset management","Task","EP-07","Medium","3","uns-meta, ep07, implementation","- **Background**: Manage certificates and trust stores for MQTT and Postgres clients.
+  - **In Scope**:
+    - Provide utility to load certs from disk or secret store.
+    - Implement rotation watcher with safe reload.
+    - Emit metrics/logging on rotation events.
+  - **Out of Scope**:
+    - Server-side certificate issuance.
+  - **References**:
+    - docs/epics/EP-07 - Security & Configuration (TLS, Secrets).md","Cert rotations occur without downtime in staging test.
+Metrics/logs capture rotation success/failure.
+Documentation updated with rotation steps."
+"TBD-EP-07-IMP-03","Security checklist documentation","Task","EP-07","Medium","1","uns-meta, ep07, documentation","- **Background**: Provide go-live checklist covering TLS, secrets, and permissions.
+  - **In Scope**:
+    - Draft checklist referencing tests and automation.
+    - Include escalation contacts and review cadence.
+    - Store under security docs with versioning.
+  - **Out of Scope**:
+    - Broader corporate security policies.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (Security section)","Checklist stored at `docs/runbooks/security-checklist.md`.
+Includes mapping to SEC test cases.
+Approved by security lead."
+"TBD-EP-08-UT-01","Metrics registry coverage","Task","EP-08","High","2","uns-meta, ep08, unit-test","- **Background**: Metrics registry should expose counters, gauges, histograms for all critical workflows.
+  - **In Scope**:
+    - Unit tests verifying registration of metrics defined in observability spec.
+    - Ensure metric names and labels follow naming convention.
+    - Validate lazy initialization avoids duplicate registrations.
+  - **Out of Scope**:
+    - Exporter integration (covered in integration tests).
+  - **References**:
+    - docs/epics/EP-08 - Observability & Operational Readiness.md","Unit tests confirm presence of ingest, decode, db, cdc, canary metrics.
+Label sets validated against spec to prevent cardinality explosion.
+Duplicate registration attempts raise errors caught by tests."
+"TBD-EP-08-UT-02","Structured logging formatter tests","Task","EP-08","High","2","uns-meta, ep08, unit-test","- **Background**: Logging formatter must produce JSON with correlation ids and redaction.
+  - **In Scope**:
+    - Tests for log fields, timestamp formatting, level mapping.
+    - Validate redaction of sensitive fields works with nested objects.
+    - Ensure error stack traces captured in structured fields.
+  - **Out of Scope**:
+    - External log shipping.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (OBS-02)","Logs render as JSON with required fields present.
+Redaction covers configured keys and patterns.
+Formatter handles errors without panics."
+"TBD-EP-08-UT-03","Alert rule unit validation","Task","EP-08","Medium","1","uns-meta, ep08, unit-test","- **Background**: Ensure Prometheus alert rule templates render correctly with placeholder data.
+  - **In Scope**:
+    - Use promtool or similar to validate syntax.
+    - Provide sample data to ensure alert triggers as expected.
+    - Cover alerts for CDC lag, circuit open, and sustained failures.
+  - **Out of Scope**:
+    - Pagerduty integration.
+  - **References**:
+    - docs/epics/EP-08 - Observability & Operational Readiness.md","promtool validation passes for all recording/alerting rules.
+Unit tests confirm alert expression thresholds align with runbook guidance.
+Template variables resolved without missing values."
+"TBD-EP-08-IT-01","Prometheus scrape integration test","Task","EP-08","High","3","uns-meta, ep08, integration-test","- **Background**: Validate metrics endpoint exposes expected metrics and responds within latency budget.
+  - **In Scope**:
+    - Spin up service with instrumentation enabled.
+    - Use Prometheus docker container to scrape and verify metric presence.
+    - Check performance overhead remains within <10ms per scrape.
+  - **Out of Scope**:
+    - Long-term retention config.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (OBS-01)","Integration test confirms metrics appear with expected values after workload.
+Scrape latency under threshold measured.
+CI publishes scrape verification report."
+"TBD-EP-08-IT-02","Log pipeline integration test","Task","EP-08","Medium","3","uns-meta, ep08, integration-test","- **Background**: Ensure logs can be shipped to aggregation stack and maintain structure.
+  - **In Scope**:
+    - Send sample workloads generating error/info logs.
+    - Push logs through Fluent Bit or vector to local sink.
+    - Verify structure preserved and secrets redacted.
+  - **Out of Scope**:
+    - Production log platform integration.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Logging)","Aggregated logs remain JSON and searchable by correlation id.
+Redactions confirmed in downstream sink.
+Documentation updated with pipeline steps."
+"TBD-EP-08-CT-01","Observability contract catalogue","Task","EP-08","High","2","uns-meta, ep08, contract-test","- **Background**: Provide formal catalogue of metrics, logs, and alerts for stakeholders.
+  - **In Scope**:
+    - Generate markdown table listing metric names, descriptions, labels, owners.
+    - Include JSON schema for log events.
+    - Link alert definitions with severity and runbook references.
+  - **Out of Scope**:
+    - Dashboard definitions.
+  - **References**:
+    - docs/epics/EP-08 - Observability & Operational Readiness.md","Catalogue stored at `docs/contracts/observability_catalog.md`.
+CI check ensures catalogue updated when instrumentation changes.
+Stakeholders acknowledge receipt."
+"TBD-EP-08-IMP-01","Implement Prometheus instrumentation","Task","EP-08","High","4","uns-meta, ep08, implementation","- **Background**: Add instrumentation within services for ingest, decode, persistence, CDC, and Canary flows.
+  - **In Scope**:
+    - Register counters/gauges/histograms per spec.
+    - Integrate metrics emission in critical code paths.
+    - Document metric naming and label usage inline.
+  - **Out of Scope**:
+    - External alerting config.
+  - **References**:
+    - docs/epics/EP-08 - Observability & Operational Readiness.md","Metrics available via `/metrics` endpoint.
+Unit/integration tests confirm instrumentation.
+Performance impact measured and acceptable."
+"TBD-EP-08-IMP-02","Implement structured logging stack","Task","EP-08","Medium","3","uns-meta, ep08, implementation","- **Background**: Provide JSON logging with correlation ids and redaction.
+  - **In Scope**:
+    - Configure logging library with context propagation.
+    - Integrate request/metric ids to logs.
+    - Ensure error handling logs include stack traces.
+  - **Out of Scope**:
+    - Log storage infrastructure.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Logging)","Logs match structured format across services.
+Tests confirm redaction rules applied.
+Observability doc references log structure."
+"TBD-EP-08-IMP-03","Draft alerting runbook","Task","EP-08","Medium","1","uns-meta, ep08, documentation","- **Background**: Operators require guide linking alerts to actions.
+  - **In Scope**:
+    - Document alerts, thresholds, escalation contacts.
+    - Provide troubleshooting steps per alert.
+    - Link to metrics/logging resources.
+  - **Out of Scope**:
+    - Incident management policy.
+  - **References**:
+    - docs/epics/EP-08 - Observability & Operational Readiness.md","Runbook stored at `docs/runbooks/alerting.md`.
+Includes mapping of alert -> metric -> remediation.
+Reviewed by SRE team."
+"TBD-EP-09-UT-01","Fixture loader unit tests","Task","EP-09","High","2","uns-meta, ep09, unit-test","- **Background**: Central fixture loader must support Sparkplug payloads, UNS paths, and database snapshots.
+  - **In Scope**:
+    - Implement tests verifying fixture discovery, schema validation, and caching.
+    - Ensure loader handles versioned fixtures with semantic version enforcement.
+    - Provide fail-fast errors when fixture missing.
+  - **Out of Scope**:
+    - Fixture content authoring (handled in other epics).
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (Testing infrastructure)","Unit tests confirm loader returns typed fixture objects.
+Missing fixture surfaces descriptive error.
+Version mismatches cause test failure with remediation hint."
+"TBD-EP-09-UT-02","Test harness utilities coverage","Task","EP-09","High","2","uns-meta, ep09, unit-test","- **Background**: Shared test utilities (e.g., correlation id generator, clock mocks) require coverage to ensure stability.
+  - **In Scope**:
+    - Add tests for deterministic ID generation, time travel controls, and logging assertions.
+    - Ensure utilities thread-safe and documented.
+    - Validate utilities support parallel test execution.
+  - **Out of Scope**:
+    - Production runtime utilities.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Testing approach)","Utilities operate correctly under concurrency tests.
+Logging assertions capture structured entries.
+Clock mocks support time jumps without flakiness."
+"TBD-EP-09-UT-03","Coverage threshold guard tests","Task","EP-09","Medium","1","uns-meta, ep09, unit-test","- **Background**: Need automated guards to ensure minimum coverage levels.
+  - **In Scope**:
+    - Add unit tests verifying coverage report parser rejects builds below threshold.
+    - Ensure parser handles multiple language reports (Go, Python, SQL tests) if present.
+    - Provide human-friendly failure messaging.
+  - **Out of Scope**:
+    - Actual coverage improvements (handled per epic).
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (Quality gates)","Guard fails pipeline when coverage < target.
+Reports aggregated and published in artifacts.
+Failure message links to remediation doc."
+"TBD-EP-09-IT-01","Full pipeline smoke test harness","Task","EP-09","High","5","uns-meta, ep09, integration-test","- **Background**: Provide automated smoke test orchestrating MQTT -> decode -> Postgres -> CDC -> Canary mock.
+  - **In Scope**:
+    - Compose existing harnesses into single workflow.
+    - Validate key metrics, logs, and data persistence at each stage.
+    - Run in CI nightly with artifact capture.
+  - **Out of Scope**:
+    - Performance benchmarking.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (End-to-end testing)","Smoke test passes in CI and fails fast on regression.
+Artifacts include logs, metrics, DB snapshots for debugging.
+Execution time under 20 minutes."
+"TBD-EP-09-IT-02","CI environment provisioning test","Task","EP-09","Medium","3","uns-meta, ep09, integration-test","- **Background**: Ensure infrastructure setup scripts (containers, secrets) function reliably in CI.
+  - **In Scope**:
+    - Add integration test verifying container orchestration and secret injection.
+    - Capture timing metrics for setup phases.
+    - Provide failure diagnostics when provisioning fails.
+  - **Out of Scope**:
+    - Production provisioning.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (DevOps)","CI job provisions services without manual steps.
+Failures emit actionable logs and hints.
+Setup duration tracked for optimization."
+"TBD-EP-09-CT-01","CI quality gate contract","Task","EP-09","High","2","uns-meta, ep09, contract-test","- **Background**: Document and enforce list of required checks before merge.
+  - **In Scope**:
+    - Define YAML manifest enumerating required jobs, coverage thresholds, linting.
+    - Add contract test verifying manifest vs actual pipeline.
+    - Publish manifest for team visibility.
+  - **Out of Scope**:
+    - Tool-specific configuration (handled in downstream repos).
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (Quality gates)","Contract test fails when pipeline deviates from manifest.
+Manifest stored at `docs/contracts/ci_quality_gates.yaml`.
+Reviews required for manifest changes."
+"TBD-EP-09-IMP-01","Build unified test harness CLI","Task","EP-09","High","4","uns-meta, ep09, implementation","- **Background**: Simplify running unit/integration/contract tests locally.
+  - **In Scope**:
+    - Create CLI that orchestrates test suites, environment setup, and reporting.
+    - Provide options for selective test categories.
+    - Emit summary JSON consumed by CI.
+  - **Out of Scope**:
+    - GUI for test execution.
+  - **References**:
+    - docs/Metadata Sync Microservice Solution Design - Release 1.0.md (Developer workflow)","CLI runs on Windows/Linux/macOS.
+Produces exit codes aligning with CI requirements.
+Documentation updated."
+"TBD-EP-09-IMP-02","Set up CI pipeline with parallel stages","Task","EP-09","Medium","5","uns-meta, ep09, implementation","- **Background**: Optimize CI throughput by running unit, integration, contract tests in parallel.
+  - **In Scope**:
+    - Configure workflow (GitHub Actions/Azure DevOps) with caching and parallelization.
+    - Integrate quality gates manifest.
+    - Publish artifacts for logs, coverage, contracts.
+  - **Out of Scope**:
+    - CD deployment.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (CI requirements)","Pipeline executes in under 30 minutes on baseline hardware.
+Failures surface clear context and links to artifacts.
+Gates enforced before merge allowed."
+"TBD-EP-09-IMP-03","Testing documentation and onboarding","Task","EP-09","Medium","1","uns-meta, ep09, documentation","- **Background**: Provide onboarding guide for developers to run tests locally and interpret CI results.
+  - **In Scope**:
+    - Document prerequisites, commands, troubleshooting.
+    - Explain quality gates and waiver process.
+    - Link to harness CLI and fixtures.
+  - **Out of Scope**:
+    - Corporate onboarding.
+  - **References**:
+    - docs/Testing Specification - Metadata Sync Microservice - Release 1.0.md (Onboarding)","Guide stored at `docs/runbooks/testing-onboarding.md`.
+Includes flowchart for selecting test suites.
+Reviewed by new hire buddy program."

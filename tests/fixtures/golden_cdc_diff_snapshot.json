@@ -1,0 +1,32 @@
+[
+  {
+    "uns_path": "Secil/Portugal/Cement/Maceira/Kiln/T1",
+    "versions": [5, 6],
+    "metadata": {
+      "latest_version": 6,
+      "previous_version": 5,
+      "latest_actor": "cdc-writer",
+      "actors": ["cdc-listener", "cdc-writer"],
+      "timestamps": ["2025-09-01T12:00:00Z", "2025-09-01T12:05:00Z"]
+    },
+    "changes": {
+      "displayHigh": 1800,
+      "displayLow": 30,
+      "engUnit": "C"
+    }
+  },
+  {
+    "uns_path": "Secil/Portugal/Cement/Maceira/Kiln/T2",
+    "versions": [1],
+    "metadata": {
+      "latest_version": 1,
+      "previous_version": null,
+      "latest_actor": "cdc-listener",
+      "actors": ["cdc-listener"],
+      "timestamps": ["2025-09-01T12:01:00Z"]
+    },
+    "changes": {
+      "description": "Kiln feed rate"
+    }
+  }
+]

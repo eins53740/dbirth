@@ -1,0 +1,205 @@
+{
+  "info": {
+    "name": "Secil – Canary Tag Update (v25)",
+    "_postman_id": "3f5c9f80-6b35-4b66-9f0a-aaaaaaaabbbb",
+    "description": "End-to-end workflow to update a Canary tag value (Write API v25 + Read API v25). Includes session token retrieval, tag discovery, optional configuration, write, and verification.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1) Get Session Token",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{write_api_host}}/getSessionToken",
+          "host": [
+            "{{write_api_host}}"
+          ],
+          "path": [
+            "getSessionToken"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"apiToken\": \"{{ApiToken}}\",\n  \"historians\": [\n    \"{{HistorianServer}}\"\n  ],\n  \"clientId\": \"{{ClientId}}\",\n  \"settings\": {\n    \"clientTimeout\": 300000,\n    \"fileSize\": 8,\n    \"autoCreateDatasets\": true\n  }\n}"
+        },
+        "description": "Retrieves a session token for the Write API. Saves it as {{SessionToken}}."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "let json = {};",
+              "try { json = pm.response.json(); } catch(e) { }",
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Session token present', function () {",
+              "  pm.expect(json.sessionToken, 'sessionToken').to.be.a('string').and.not.empty;",
+              "});",
+              "// Persist SessionToken for later requests",
+              "if (json.sessionToken) {",
+              "  pm.collectionVariables.set('SessionToken', json.sessionToken);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2) Browse Tags (exists?)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{read_api_host}}/v2/browseTags",
+          "host": [
+            "{{read_api_host}}"
+          ],
+          "path": [
+            "v2",
+            "browseTags"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"apiToken\": \"{{ApiToken}}\",\n  \"path\": \"\",\n  \"deep\": true,\n  \"search\": \"{{TagName}}\"\n}"
+        },
+        "description": "Quick search by tag name to confirm existence."
+      },
+      "response": []
+    },
+    {
+      "name": "3) Configure Tag (optional)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{write_api_host}}/configureTags",
+          "host": [
+            "{{write_api_host}}"
+          ],
+          "path": [
+            "configureTags"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"sessionToken\": \"{{SessionToken}}\",\n  \"tags\": {\n    \"{{TagName}}\": {\n      \"transform\": \"\",\n      \"normalize\": \"\"\n    }\n  }\n}"
+        },
+        "description": "Declare/update tag so it exists prior to write (optional when autoCreateDatasets is true)."
+      },
+      "response": []
+    },
+    {
+      "name": "4) Write Value (manualEntryStoreData)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{write_api_host}}/manualEntryStoreData",
+          "host": [
+            "{{write_api_host}}"
+          ],
+          "path": [
+            "manualEntryStoreData"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"sessionToken\": \"{{SessionToken}}\",\n  \"manualentrytvqs\": {\n    \"{{TagName}}\": [\n      [\"{{Timestamp}}\", {{Value}}]\n    ]\n  }\n}"
+        },
+        "description": "Write a single TVQ point to the tag."
+      },
+      "response": []
+    },
+    {
+      "name": "5) Verify Write (getTagData)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{read_api_host}}/v2/getTagData",
+          "host": [
+            "{{read_api_host}}"
+          ],
+          "path": [
+            "v2",
+            "getTagData"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"apiToken\": \"{{ApiToken}}\",\n  \"tags\": [\n    \"{{TagName}}\"\n  ],\n  \"startTime\": \"{{Timestamp}}\",\n  \"endTime\": \"{{Timestamp}}\",\n  \"aggregateName\": \"Raw\",\n  \"aggregateInterval\": \"00:01:00\",\n  \"boundaryType\": \"Inside\"\n}"
+        },
+        "description": "Fetch the written datapoint to confirm the value."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "write_api_host",
+      "value": "http://<your-write-api-host>"
+    },
+    {
+      "key": "read_api_host",
+      "value": "http://<your-read-api-host>"
+    },
+    {
+      "key": "ApiToken",
+      "value": "63c9a371-2768-4730-9416-28a42d5ac36e"
+    },
+    {
+      "key": "HistorianServer",
+      "value": "https://scunscanary.secil.pt:55236"
+    },
+    {
+      "key": "ClientId",
+      "value": "Secil-Canary-MCP"
+    },
+    {
+      "key": "TagName",
+      "value": "Secil.Portugal.Maceira.400 - Clinker Production.442 - Clinker Cooler.Normalised.Analog.AR6PT_E_REDECAM.Value"
+    },
+    {
+      "key": "Timestamp",
+      "value": "2025-11-06T00:00:00Z"
+    },
+    {
+      "key": "Value",
+      "value": "999"
+    },
+    {
+      "key": "SessionToken",
+      "value": ""
+    }
+  ]
+}

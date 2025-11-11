@@ -1,0 +1,110 @@
+openapi: 3.0.3
+info:
+  title: Canary SAF and Views API (Subset)
+  version: 0.1.0-draft
+  description: |
+    Draft contract fragments used for client development and contract tests.
+    Refer to embedded HTML docs for full specification:
+      - docs/apis/canary_saf_index.html
+      - docs/apis/canary_views_index.html
+servers:
+  - url: https://scunscanary.secil.pt:55293
+paths:
+  /api/v1/getSessionToken:
+    post:
+      summary: Acquire Store & Forward session token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                apiToken:
+                  type: string
+                historians:
+                  type: array
+                  items: { type: string }
+                clientId:
+                  type: string
+                settings:
+                  type: object
+                  properties:
+                    clientTimeout:
+                      type: integer
+                    autoCreateDatasets:
+                      type: boolean
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  statusCode: { type: string }
+                  errors: { type: array, items: { type: string } }
+                  sessionToken: { type: string }
+  /api/v1/keepAlive:
+    post:
+      summary: Extend session timeout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sessionToken:
+                  type: string
+      responses:
+        '200': { description: OK }
+  /api/v1/storeData:
+    post:
+      summary: Store properties-only metadata updates for tags
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sessionToken: { type: string }
+                tags:
+                  type: object
+                  additionalProperties:
+                    type: object
+                    description: Tag-specific write settings/properties
+      responses:
+        '200': { description: OK }
+  /api/v2/browseTags:
+    post:
+      summary: Browse tags under a path (deep + pagination supported)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                apiToken: { type: string }
+                path: { type: string }
+                deep: { type: boolean }
+                search: { type: string }
+                maxSize: { type: integer }
+                continuation: { type: string, nullable: true }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  statusCode: { type: string }
+                  errors: { type: array, items: { type: string } }
+                  tags:
+                    type: object
+                    additionalProperties:
+                      type: object
+                  continuation: { type: string, nullable: true }
